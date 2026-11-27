@@ -42,9 +42,10 @@
   </form>
 {%- endmacro %}
 
-{% macro photo_thumb(photo, album_label=None) -%}
+{% macro photo_thumb(photo, album_label=None, album_slug=None) -%}
   {% set depth_flag = photo.depth_issue|default(false) %}
   <button type="button" class="thumb" data-tree="{{ photo.tree }}" data-id="{{ photo.id }}"
+          data-album="{{ album_slug|default('') }}"
           data-depth-flag="{{ '1' if depth_flag else '0' }}"
           data-depth-note="{{ photo.depth_note|default('') }}"
           data-caption="{{ photo.stamp or photo.id }}{% if album_label %} · {{ album_label }}{% endif %}{% if depth_flag %} · Tiefenproblem{% endif %}"
@@ -66,7 +67,7 @@
           data-score="{{ composite if composite is not none else '' }}"
           data-similarity="{{ similarity if similarity is not none else '' }}"
           data-stamp="{{ photo.id }}">
-    {{ photo_thumb(photo, album_label) }}
+    {{ photo_thumb(photo, album_label, album_slug) }}
     <figcaption class="meta">
       {% if allow_move %}
       <label class="pick">
