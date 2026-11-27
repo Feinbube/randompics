@@ -1,0 +1,152 @@
+{% macro badge(album) -%}
+  {% if album.mixed %}<span class="badge mixed">GEMISCHT · {{ album.private }} privat</span>
+  {% elif album.is_private %}<span class="badge priv">PRIVAT</span>
+  {% else %}<span class="badge pub">ÖFFENTLICH</span>{% endif %}
+{%- endmacro %}
+
+{% macro upload_form(albums, csrf, current=None) -%}
+  {% set suffix = current.slug if current else 'all' %}
+  <form method="post" action="/admin/upload" enctype="multipart/form-data"
+        class="upload-form" data-upload>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if current %}
+      <input type="hidden" name="album" value="{{ current.slug }}">
+      <div class="field">
+        <span class="field-label muted">Album</span>
+        <strong>{{ current.label }}</strong>
+      </div>
+    {% else %}
+      <div class="field">
+        <label class="muted" for="up-album">Album</label>
+        <select id="up-album" name="album">
+          {% for album in albums %}
+          <option value="{{ album.slug }}">{{ album.label }}{% if album.is_private %} (privat){% endif %}{% if album.mixed %} (gemischt){% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+    {% endif %}
+    <div class="field">
+      <label class="muted" for="up-visibility-{{ suffix }}">Sichtbarkeit</label>
+      <select id="up-visibility-{{ suffix }}" name="visibility">
+        <option value="auto" selected>wie Album</option>
+        <option value="private">privat</option>
+        <option value="public">öffentlich</option>
+      </select>
+    </div>
+    <div class="field field-wide">
+      <label class="muted" for="up-files-{{ suffix }}">Dateien</label>
+      <input id="up-files-{{ suffix }}" type="file" name="files" accept="image/jpeg" multiple required>
+    </div>
+    <button type="submit">Hochladen &amp; rendern</button>
+    <p class="upload-status muted" data-upload-status>Nur SBS-JPEGs (Side-by-Side); 2–5 s pro Bild. „wie Album“ ist bei privaten und gemischten Alben privat.</p>
+  </form>
+{%- endmacro %}
+
+{% macro photo_thumb(photo, album_label=None) -%}
+  {% set depth_flag = photo.depth_issue|default(false) %}
+  <button type="button" class="thumb" data-tree="{{ photo.tree }}" data-id="{{ photo.id }}"
+          data-depth-flag="{{ '1' if depth_flag else '0' }}"
+          data-depth-note="{{ photo.depth_note|default('') }}"
+          data-caption="{{ photo.stamp or photo.id }}{% if album_label %} · {{ album_label }}{% endif %}{% if depth_flag %} · Tiefenproblem{% endif %}"
+          aria-label="Vorschau {{ photo.stamp or photo.id }}{% if album_label %} aus {{ album_label }}{% endif %}">
+    <img src="/admin/media/{{ photo.tree }}/{{ photo.id }}/thumb.jpg" alt=""
+         loading="lazy" width="480" height="360">
+  </button>
+{%- endmacro %}
+
+{% macro photo_tile(photo, album_slug, csrf, back, label=None, album_label=None,
+                    allow_visibility=True, allow_delete=True, gate=0, show_similarity=True) -%}
+  {% set composite = photo.score.get('composite') if photo.score else none %}
+  {% set similarity = photo.score.get('similarity') if photo.score else none %}
+  {% set depth_flag = photo.depth_issue|default(false) %}
+  <figure class="tile"
+          data-search="{{ (photo.id ~ ' ' ~ (photo.stamp or '') ~ ' ' ~ (album_label or ''))|lower }}{% if depth_flag %} tiefenproblem{% endif %}"
+          data-score="{{ composite if composite is not none else '' }}"
+          data-similarity="{{ similarity if similarity is not none else '' }}"
+          data-stamp="{{ photo.id }}">
+    {{ photo_thumb(photo, album_label) }}
+    <figcaption class="meta">
+      <span class="score" title="{{ photo.id }}">
+        {{ photo.stamp or photo.id }}
+        {% if label %}<br><strong>{{ label }}</strong>{% endif %}
+        {% if album_label %}<br><span class="muted">{{ album_label }}</span>{% endif %}
+        <span class="depth-badge"{% if not depth_flag %} hidden{% endif %}>⚠ Tiefenproblem</span>
+        {% if composite is not none %}
+          <br>Score {{ '%.2f'|format(composite) }}/5
+          {% if similarity is not none and show_similarity %}<br>Ähnl. {{ '%.1f'|format(similarity * 100) }} %{% endif %}
+          {% if gate and composite < gate %}<br><span class="weak">unter Gate</span>{% endif %}
+        {% endif %}
+      </span>
+      {% if allow_visibility or allow_delete %}
+      <div class="tile-actions">
+        {% if allow_visibility %}
+        <form method="post" action="/admin/photo/visibility"
+              {% if photo.tree == 'public' %}title="Foto von randompics.de nehmen; bestehende Links bleiben unverändert."{% endif %}>
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="id" value="{{ photo.id }}">
+          <input type="hidden" name="album" value="{{ album_slug }}">
+          <input type="hidden" name="back" value="{{ back }}">
+          {% if photo.tree == 'public' %}
+            <input type="hidden" name="mode" value="private">
+            <button type="submit">Privat</button>
+          {% else %}
+            <input type="hidden" name="mode" value="public">
+            <button type="submit">Öffentlich</button>
+          {% endif %}
+        </form>
+        {% endif %}
+        {% if allow_delete %}
+        <form method="post" action="/admin/remove"
+              data-confirm="{{ photo.id }} endgültig löschen? Render-Datei, Original in source/Valencia, Score und Kopien in Links werden entfernt — nicht wiederherstellbar.">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="id" value="{{ photo.id }}">
+          <input type="hidden" name="album" value="{{ album_slug }}">
+          <input type="hidden" name="back" value="{{ back }}">
+          <button type="submit" class="danger">Löschen</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </figcaption>
+  </figure>
+{%- endmacro %}
+
+{% macro depth_tile(item, csrf) -%}
+  <figure class="tile depth-tile"
+          data-search="{{ (item.id ~ ' ' ~ item.stamp ~ ' ' ~ item.album_label ~ ' ' ~ item.note)|lower }}">
+    {{ photo_thumb(item, item.album_label) }}
+    <figcaption class="meta">
+      <span class="score" title="{{ item.id }}">
+        {{ item.stamp }}
+        <br><span class="muted">{{ item.album_label }}</span>
+        {% if item.manual %}<span class="depth-badge">⚠ MARKIERT</span>{% else %}<span class="depth-badge" hidden>⚠ MARKIERT</span>{% endif %}
+        {% if not item.has_depth %}<br><span class="badge depth">KEIN TIEFENBILD</span>{% endif %}
+      </span>
+      {% if item.note %}<p class="depth-note">{{ item.note }}</p>{% endif %}
+      {% if item.updated_label %}<p class="muted depth-updated">notiert {{ item.updated_label }}</p>{% endif %}
+      <form method="post" action="/admin/depth/flag" class="depth-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="id" value="{{ item.id }}">
+        <input type="hidden" name="action" value="flag">
+        <input type="hidden" name="back" value="depth">
+        <label class="sr-only" for="note-{{ item.id }}">Notiz zum Tiefenproblem</label>
+        <input id="note-{{ item.id }}" type="text" name="note" value="{{ item.note }}"
+               maxlength="500" placeholder="Was ist falsch? z.B. Halo am Rand">
+        <button type="submit">Notiz speichern</button>
+      </form>
+      <div class="tile-actions">
+        {% if item.manual %}
+        <form method="post" action="/admin/depth/flag"
+              data-confirm="{{ item.id }} {{ 'als behoben markieren? Die Notiz wird entfernt.' if item.has_depth else 'Markierung entfernen? Die Notiz wird gelöscht; das Foto bleibt ohne Tiefenbild in der Liste.' }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="id" value="{{ item.id }}">
+          <input type="hidden" name="action" value="clear">
+          <input type="hidden" name="back" value="depth">
+          <button type="submit">{{ 'Problem behoben' if item.has_depth else 'Markierung entfernen' }}</button>
+        </form>
+        {% endif %}
+        <a class="button-link" href="/admin/album/{{ item.album_slug }}">Im Album öffnen</a>
+      </div>
+    </figcaption>
+  </figure>
+{%- endmacro %}

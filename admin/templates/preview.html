@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>{{ pid }} · 3D-Prüfansicht</title>
+<style>
+  :root { --ink:#e8ecee; --muted:#96a2a8; --line:#2a3338; --panel:rgba(14,17,21,.86); }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin:0; background:#05070a; color:var(--ink); font:14px/1.45 system-ui, sans-serif; overflow:hidden; }
+  #view { position:absolute; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  #view[hidden] { display:none; }
+  #fallback { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  #fallback[hidden] { display:none; }
+  header { position:fixed; top:14px; left:16px; z-index:3; text-shadow:0 1px 4px #000; }
+  header strong { font-size:.95rem; letter-spacing:.02em; }
+  header span { color:var(--muted); font-size:.78rem; margin-left:.5rem; }
+  nav { position:fixed; left:50%; bottom:14px; transform:translateX(-50%); z-index:3;
+    display:flex; flex-direction:column; gap:4px; align-items:stretch;
+    padding:6px; border:1px solid var(--line); border-radius:8px; background:var(--panel);
+    width:min(96vw,560px); max-width:96vw; }
+  .nav-controls { display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:center; }
+  nav label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:.78rem; }
+  .nav-note { margin:0; color:var(--muted); font-size:.72rem; text-align:center;
+    text-shadow:0 1px 3px #000; }
+  input[type=range] { width:100px; accent-color:#e8d9bf; }
+  button { background:transparent; color:var(--ink); border:1px solid transparent; border-radius:4px;
+    padding:6px 10px; font:inherit; font-size:.78rem; cursor:pointer; }
+  button:hover { background:rgba(255,255,255,.08); }
+  button[aria-pressed=true] { background:rgba(255,255,255,.14); border-color:var(--line); font-weight:600; }
+  button[aria-pressed=true]::before { content:"✓ "; font-size:.72rem; }
+  #sbsview { position:fixed; inset:0; z-index:2; width:100%; height:100%; object-fit:contain; background:#000; }
+  #sbsview[hidden] { display:none; }
+  @media (pointer: coarse) {
+    button { min-height:44px; }
+    input[type=range] { min-height:44px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="2.5D-Ansicht des Fotos"></canvas>
+<img id="fallback" alt="" hidden>
+
+<header><strong>{{ pid }}</strong><span>{{ data.tree_label }}</span></header>
+
+<nav aria-label="Ansicht steuern">
+  <div class="nav-controls">
+    {% if data.ok %}
+    <label>Tiefe <input id="strength" type="range" min="0" max="200" value="100" step="5"></label>
+    <button id="sway" type="button" aria-pressed="true">Bewegung</button>
+    <button id="depth" type="button" aria-pressed="false">Tiefenkarte</button>
+    {% endif %}
+    {% if not data.single %}<button id="sbs" type="button" aria-pressed="false">3D-Brille</button>{% endif %}
+    <button id="close" type="button">Schließen</button>
+  </div>
+  <p class="nav-note">
+    {% if data.ok %}Maus bewegen für 2.5D.{% else %}Flaches Foto — kein Tiefenbild.{% endif %}
+  </p>
+</nav>
+<img id="sbsview" alt="Stereopaar" hidden>
+
+<script src="/admin/viewer.js"></script>
+<script>
+(function () {
+  const data = {{ data | tojson }};
+  const canvas = document.getElementById("view");
+  const fallback = document.getElementById("fallback");
+  const sbsview = document.getElementById("sbsview");
+  const sbsButton = document.getElementById("sbs");
+  let viewer = null;
+
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("nicht ladbar: " + src));
+      img.src = src;
+    });
+  }
+
+  function close() {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: "rp-close" }, location.origin);
+    }
+  }
+  document.getElementById("close").addEventListener("click", close);
+
+  window.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") {
+      close();
+    } else if ((event.key === "ArrowLeft" || event.key === "ArrowRight")
+               && window.parent !== window) {
+      window.parent.postMessage({
+        type: "rp-nav",
+        dir: event.key === "ArrowRight" ? 1 : -1
+      }, location.origin);
+    }
+  });
+
+  if (sbsButton) {
+    sbsButton.addEventListener("click", function () {
+      const on = sbsButton.getAttribute("aria-pressed") !== "true";
+      sbsButton.setAttribute("aria-pressed", String(on));
+      if (on) {
+        sbsview.src = data.sbs;
+        sbsview.hidden = false;
+      } else {
+        sbsview.hidden = true;
+      }
+    });
+  }
+
+  if (!data.ok) {
+    canvas.hidden = true;
+    fallback.hidden = false;
+    fallback.src = data.scene;
+    fallback.alt = data.id;
+    return;
+  }
+
+  const strength = document.getElementById("strength");
+  const swayButton = document.getElementById("sway");
+  const depthButton = document.getElementById("depth");
+  viewer = window.RPViewer.create(canvas);
+
+  strength.addEventListener("input", function () {
+    if (viewer) viewer.setStrength(Number(strength.value) / 100);
+  });
+  swayButton.addEventListener("click", function () {
+    const on = swayButton.getAttribute("aria-pressed") !== "true";
+    swayButton.setAttribute("aria-pressed", String(on));
+    if (viewer) viewer.setSway(on);
+  });
+  depthButton.addEventListener("click", function () {
+    const on = depthButton.getAttribute("aria-pressed") !== "true";
+    depthButton.setAttribute("aria-pressed", String(on));
+    if (viewer) viewer.setDepthMode(on);
+  });
+
+  Promise.all([loadImage(data.scene), loadImage(data.depth)]).then(function (images) {
+    const scene = images[0];
+    const depth = images[1];
+    if (!viewer.load(scene, depth, data.anchor)) {
+      canvas.hidden = true;
+      fallback.hidden = false;
+      fallback.src = data.scene;
+      return;
+    }
+    viewer.setDepthMode(false);
+  }).catch(function () {
+    canvas.hidden = true;
+    fallback.hidden = false;
+    fallback.src = data.scene;
+  });
+
+  canvas.addEventListener("pointermove", function (event) {
+    if (!viewer) return;
+    if (event.pointerType === "touch" && event.buttons === 0) return;
+    const x = (event.clientX / window.innerWidth) * 2 - 1;
+    viewer.setTarget(-x);
+    viewer.notePointer();
+  });
+  canvas.addEventListener("pointerleave", function () {
+    if (viewer) viewer.notePointer(0);
+  });
+  window.addEventListener("resize", function () {
+    if (viewer) viewer.resize();
+  });
+})();
+</script>
+</body>
+</html>

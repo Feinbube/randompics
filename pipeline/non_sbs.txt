@@ -1,0 +1,1 @@
+# Photos without a side-by-side stereo pair; skipped by the build.

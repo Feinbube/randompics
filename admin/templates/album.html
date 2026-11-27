@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% block title %}{{ album.label }} · randompics{% endblock %}
+{% from "_macros.html" import badge, photo_tile, upload_form %}
+{% block body %}
+<header class="top">
+  <div class="brand">randompics · Verwaltung</div>
+  <div class="row" style="margin:0">
+    <span class="muted">{{ user }}</span>
+    <a href="https://randompics.de/" target="_blank" rel="noopener">Seite ansehen ↗</a>
+    <form method="post" action="/admin/logout" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Abmelden</button>
+    </form>
+  </div>
+</header>
+
+<main>
+  <a class="back" href="/admin/">← Alle Alben</a>
+  <div class="album-head">
+    <div>
+      <h1 style="margin:0 0 .2rem">{{ album.label }}</h1>
+      <p class="muted" style="margin:0">
+        {{ album.slug }} · {{ album.count }} Foto{% if album.count != 1 %}s{% endif %} · {{ album.published }} veröffentlicht
+        {% if album.public and album.private %}· {{ album.public }} öffentlich / {{ album.private }} privat{% endif %}
+        {% if album.gate %}· Gate {{ '%.1f'|format(album.gate) }}{% endif %}
+      </p>
+    </div>
+    {{ badge(album) }}
+    {% if album.public %}
+    <a class="button-link" href="https://randompics.de/#album={{ album.slug }}"
+       target="_blank" rel="noopener">Auf der Website ansehen ↗</a>
+    {% endif %}
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <p class="flash {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">
+        {{ '⛔ ' if category == 'error' else '✅ ' }}{{ message }}
+      </p>
+    {% endfor %}
+  {% endwith %}
+
+  <div class="tool-grid">
+    <section class="album">
+      <h2>Album verwalten</h2>
+
+      <details class="rename">
+        <summary>Umbenennen</summary>
+        <form method="post" action="/admin/album/rename" class="row" style="margin:.5rem 0 0">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="album" value="{{ album.slug }}">
+          <input type="hidden" name="back" value="album:{{ album.slug }}">
+          <input type="text" name="label" value="{{ album.label }}" required aria-label="Anzeigename">
+          <input type="text" name="sub" value="{{ album.sub }}" placeholder="Untertitel" aria-label="Untertitel">
+          <input type="text" name="url" value="{{ album.url }}" placeholder="Link (optional)" aria-label="Link">
+          <button type="submit">Speichern</button>
+        </form>
+        <p class="muted" style="margin:.35rem 0 0">Nur der Anzeigename (plus Untertitel/Link) ändert sich —
+          Fotos, Album-Kürzel und bestehende Links bleiben, wie sie sind.</p>
+      </details>
+
+      <h3 class="subhead">Links</h3>
+      <div class="shares">
+        {% for share in album.shares %}
+        <div class="share">
+          <a href="{{ share.url }}" target="_blank" rel="noopener"><code>{{ share.url }}</code></a>
+          <span class="muted">bis {{ share.expires }}</span>
+          <button type="button" data-copy="{{ share.url }}">Kopieren</button>
+          <form method="post" action="/admin/unshare"
+                data-confirm="Link endgültig widerrufen? Er funktioniert sofort nicht mehr.">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="token" value="{{ share.token }}">
+            <input type="hidden" name="back" value="album:{{ album.slug }}">
+            <button type="submit" class="danger">Widerrufen</button>
+          </form>
+        </div>
+        {% else %}
+        <p class="muted" style="margin:0">Kein Link aktiv.</p>
+        {% endfor %}
+      </div>
+
+      <p class="hint muted">Ein Link zeigt alle Fotos des Albums — auch private und Fotos unter dem Score-Gate.</p>
+
+      {% if album.count %}
+      <form method="post" action="/admin/share" class="row" style="margin:.3rem 0 0"
+            data-confirm="Neuen Link für alle {{ album.count }} Fotos erzeugen? Er zeigt auch private Fotos und Fotos unter dem Score-Gate.">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="album" value="{{ album.slug }}">
+        <input type="hidden" name="back" value="album:{{ album.slug }}">
+        <label class="muted" for="days-{{ album.slug }}">Gültig (Tage)</label>
+        <input id="days-{{ album.slug }}" type="number" name="days" value="30" min="1" max="365">
+        <button type="submit">Link erzeugen</button>
+      </form>
+      {% endif %}
+
+      <h3 class="subhead">Sichtbarkeit</h3>
+      <form method="post" action="/admin/visibility" style="margin:.3rem 0 0"
+            {% if album.is_private %}
+            data-confirm="{{ album.count }} Fotos öffentlich machen? Das Album erscheint auf randompics.de. Bestehende Links bleiben unverändert."
+            {% else %}
+            data-confirm="{{ album.count }} Fotos privat machen? Das Album verschwindet von randompics.de. Bestehende Links zeigen die Fotos weiterhin."
+            {% endif %}>
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="album" value="{{ album.slug }}">
+        <input type="hidden" name="back" value="album:{{ album.slug }}">
+        {% if album.is_private %}
+          <input type="hidden" name="mode" value="public">
+          <button type="submit">Öffentlich machen</button>
+        {% else %}
+          <input type="hidden" name="mode" value="private">
+          <button type="submit">Privat machen</button>
+        {% endif %}
+      </form>
+      <p class="hint muted">Links sind Momentaufnahmen: Sichtbarkeitsänderungen wirken nicht auf bereits
+        erzeugte Links. „Privat“ nimmt ein Foto von randompics.de, entfernt es aber nicht aus einem Link,
+        den du schon verschickt hast.</p>
+
+      <h3 class="subhead">Score-Gate</h3>
+      <form method="post" action="/admin/gate" class="row" style="margin:.3rem 0 0">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="album" value="{{ album.slug }}">
+        <input type="hidden" name="back" value="album:{{ album.slug }}">
+        <label class="muted" for="gate-{{ album.slug }}">Nur ab Score</label>
+        <input id="gate-{{ album.slug }}" type="number" name="min" value="{{ '%.1f'|format(album.gate) }}"
+               min="0" max="5" step="0.1">
+        <button type="submit">Anwenden</button>
+      </form>
+      <p class="hint muted">0 = alle Fotos veröffentlichen. Fotos unter dem Wert bleiben im Album,
+        werden aber nicht auf randompics.de veröffentlicht.</p>
+    </section>
+
+    <section class="album">
+      <h2>Fotos hinzufügen</h2>
+      {{ upload_form([], csrf, current=album) }}
+    </section>
+  </div>
+
+  <section class="album">
+    <div class="index-head">
+      <h2>Fotos ({{ album.count }})</h2>
+      <label class="muted" for="photo-sort">Sortieren</label>
+      <select id="photo-sort" aria-label="Fotos sortieren">
+        <option value="quality-asc" selected>Qualität: schwach → gut</option>
+        <option value="quality-desc">Qualität: gut → schwach</option>
+        <option value="date-desc">Datum: neu → alt</option>
+        <option value="date-asc">Datum: alt → neu</option>
+        <option value="similarity-desc">Ähnlichkeit: hoch → niedrig</option>
+      </select>
+      <input id="photo-filter" type="search" placeholder="Foto oder Datum filtern …" aria-label="Fotos filtern">
+      <span id="photo-count" class="muted">{{ album.photos|length }} von {{ album.photos|length }}</span>
+    </div>
+    <p class="legend muted" style="margin:.2rem 0 .6rem;font-size:.82rem">
+      Score 0–5 (höher = besser) · Ähnl. = Ähnlichkeit zum ähnlichsten Foto ·
+      ⚠ Tiefenproblem = im Lightbox markiert.
+    </p>
+    {% if album.photos %}
+    <div class="grid" id="photo-grid">
+      {% for photo in album.photos %}
+        {{ photo_tile(photo, album.slug, csrf, 'album:' ~ album.slug, gate=album.gate) }}
+      {% endfor %}
+    </div>
+    <p id="photo-empty" class="empty" hidden>Kein Foto gefunden.</p>
+    {% else %}
+    <p class="empty">Noch keine Fotos. Nutze „Fotos hinzufügen“.</p>
+    {% endif %}
+  </section>
+
+  <footer class="note">
+    Löschen entfernt das Foto endgültig: Render-Dateien, Original in
+    <code>source/Valencia</code>, Album-Zuordnung, Score und Kopien in Links.
+  </footer>
+</main>
+
+{% include "_lightbox.html" %}
+
+<script>
+(function () {
+  const filter = document.getElementById("photo-filter");
+  const sort = document.getElementById("photo-sort");
+  const grid = document.getElementById("photo-grid");
+  const empty = document.getElementById("photo-empty");
+  const count = document.getElementById("photo-count");
+  if (!filter || !grid) return;
+  const sortKey = "rp-sort:{{ album.slug }}";
+  if (sort) {
+    try {
+      const saved = window.localStorage.getItem(sortKey);
+      if (saved && Array.from(sort.options).some(function (option) { return option.value === saved; })) {
+        sort.value = saved;
+      }
+    } catch (error) {
+      // private mode / storage disabled: keep the server default
+    }
+  }
+  const tiles = Array.from(grid.querySelectorAll(".tile"));
+  function number(tile, name) {
+    const value = Number.parseFloat(tile.dataset[name]);
+    return Number.isFinite(value) ? value : null;
+  }
+  function compare(a, b, mode) {
+    if (mode === "date-asc" || mode === "date-desc") {
+      const order = (a.dataset.stamp || "").localeCompare(b.dataset.stamp || "");
+      return mode === "date-asc" ? order : -order;
+    }
+    const name = mode.startsWith("similarity") ? "similarity" : "score";
+    const missing = mode.endsWith("desc") ? -Infinity : Infinity;
+    const left = number(a, name);
+    const right = number(b, name);
+    const order = (left === null ? missing : left) - (right === null ? missing : right);
+    return (mode.endsWith("desc") ? -order : order)
+      || (a.dataset.stamp || "").localeCompare(b.dataset.stamp || "");
+  }
+  function applySort() {
+    if (!sort) return;
+    const ordered = tiles.slice().sort(function (a, b) {
+      return compare(a, b, sort.value);
+    });
+    ordered.forEach(function (tile) { grid.appendChild(tile); });
+  }
+  function apply() {
+    const query = filter.value.trim().toLowerCase();
+    let visible = 0;
+    tiles.forEach(function (tile) {
+      const hit = !query || (tile.dataset.search || "").includes(query);
+      tile.hidden = !hit;
+      if (hit) visible += 1;
+    });
+    empty.hidden = visible > 0 || tiles.length === 0;
+    count.textContent = visible + " von " + tiles.length;
+  }
+  filter.addEventListener("input", apply);
+  if (sort) {
+    sort.addEventListener("change", function () {
+      try {
+        window.localStorage.setItem(sortKey, sort.value);
+      } catch (error) {
+        // storage disabled: sorting still works for this page
+      }
+      applySort();
+    });
+  }
+  applySort();
+  apply();
+})();
+</script>
+{% endblock %}

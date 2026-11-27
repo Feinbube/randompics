@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Ähnliche Fotos · randompics{% endblock %}
+{% from "_macros.html" import photo_tile %}
+{% block body %}
+<header class="top">
+  <div class="brand">randompics · Verwaltung</div>
+  <div class="row" style="margin:0">
+    <span class="muted">{{ user }}</span>
+    <a href="/admin/">Alben</a>
+    <a href="/admin/depth">Tiefenprobleme</a>
+    <a href="/admin/similar">Gruppen</a>
+    <a href="https://randompics.de/" target="_blank" rel="noopener">Seite ansehen ↗</a>
+    <form method="post" action="/admin/logout" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Abmelden</button>
+    </form>
+  </div>
+</header>
+
+<main>
+  <a class="back" href="/admin/">← Alle Alben</a>
+  <h1 style="margin:0 0 .3rem">Ähnliche Fotos</h1>
+  <p class="muted" style="margin:0 0 .4rem">
+    {{ duplicate_total }} offene Paare · NCC-Ähnlichkeit ≥ 90 %.
+    {% if duplicate_stale %}· {{ duplicate_stale }} Paare verweisen auf gelöschte Fotos und werden ausgeblendet.{% endif %}
+    {% if dismissed %}· {{ dismissed }} Paar{% if dismissed != 1 %}e{% endif %} ausgeblendet.{% endif %}
+  </p>
+  <p class="legend muted" style="margin:0 0 .6rem;font-size:.85rem">
+    „behalten“ ist die Empfehlung des Scores, keine Entscheidung: Beide Fotos sind löschbar.
+    Bei gleichem Score steht „gleich“ — dann entscheidest du. Löschen ist endgültig:
+    Render-Datei, Original, Score und Link-Kopien werden entfernt.
+  </p>
+  <p class="hint"><a class="button-link" href="/admin/similar">Nach Gruppen ansehen →</a></p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <p class="flash {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">
+        {{ '⛔ ' if category == 'error' else '✅ ' }}{{ message }}
+      </p>
+    {% endfor %}
+  {% endwith %}
+
+  {% if dismissed %}
+  <form method="post" action="/admin/duplicates/reset" class="row" style="margin:.2rem 0 .6rem">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit">Ausblendungen zurücksetzen ({{ dismissed }})</button>
+  </form>
+  {% endif %}
+
+  {% if duplicates %}
+  <div class="pairs">
+    {% for pair in duplicates %}
+    <article class="pair">
+      <div class="pair-tiles">
+        {{ photo_tile(pair.a_photo, pair.album_a, csrf, 'duplicates',
+                      label=pair.label_a, album_label=pair.album_label_a,
+                      allow_visibility=False, allow_delete=True, show_similarity=False) }}
+        {{ photo_tile(pair.b_photo, pair.album_b, csrf, 'duplicates',
+                      label=pair.label_b, album_label=pair.album_label_b,
+                      allow_visibility=False, allow_delete=True, show_similarity=False) }}
+      </div>
+      <div class="pair-meta">
+        <span class="sim">{{ pair.sim }} % ähnlich</span>
+        {% if pair.drop %}
+        <form method="post" action="/admin/remove" style="margin:0"
+              data-confirm="{{ pair.drop }} endgültig löschen? Render-Datei, Original in source/Valencia, Score und Kopien in Links werden entfernt — nicht wiederherstellbar.">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="id" value="{{ pair.drop }}">
+          <input type="hidden" name="back" value="duplicates">
+          <button type="submit" class="danger">Empfehlung: schwächeres löschen</button>
+        </form>
+        {% endif %}
+        <form method="post" action="/admin/duplicates/dismiss" style="margin:0">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="a" value="{{ pair.a_photo.id }}">
+          <input type="hidden" name="b" value="{{ pair.b_photo.id }}">
+          <button type="submit">Kein Duplikat</button>
+        </form>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">Keine offenen Paare.</p>
+  {% endif %}
+
+  <footer class="note">
+    Ein ausgeblendetes Paar bleibt ausgeblendet, bis du die Ausblendungen zurücksetzt.
+  </footer>
+</main>
+
+{% include "_lightbox.html" %}
+{% endblock %}

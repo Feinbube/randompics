@@ -1,0 +1,9 @@
+{
+  "width": 1888,
+  "height": 1408,
+  "depth_width": 944,
+  "depth_height": 704,
+  "rectified": true,
+  "anchor": 0.0,
+  "depth_source": "dav2"
+}

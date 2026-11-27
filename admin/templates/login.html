@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block body %}
+<form class="login" method="post" action="/admin/login">
+  <h1>randompics · Verwaltung</h1>
+  {% if error %}<p class="flash error" role="alert">⛔ {{ error }}</p>{% endif %}
+  <label for="password" class="muted">Passwort</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button type="submit">Anmelden</button>
+</form>
+{% endblock %}

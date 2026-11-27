@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Tiefenprobleme · randompics{% endblock %}
+{% from "_macros.html" import depth_tile %}
+{% block body %}
+<header class="top">
+  <div class="brand">randompics · Verwaltung</div>
+  <div class="row" style="margin:0">
+    <span class="muted">{{ user }}</span>
+    <a href="/admin/">Alben</a>
+    <a href="/admin/duplicates">Duplikate</a>
+    <a href="/admin/similar">Gruppen</a>
+    <a href="https://randompics.de/" target="_blank" rel="noopener">Seite ansehen ↗</a>
+    <form method="post" action="/admin/logout" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Abmelden</button>
+    </form>
+  </div>
+</header>
+
+<main>
+  <a class="back" href="/admin/">← Alle Alben</a>
+  <div class="album-head">
+    <div>
+      <h1 style="margin:0 0 .2rem">Tiefenprobleme</h1>
+      <p class="muted" style="margin:0">
+        {{ manual|length }} markiert · {{ auto|length }} ohne Tiefenbild
+        {% if stale %}· {{ stale }} verwaiste Markierung{% if stale != 1 %}en{% endif %}{% endif %}
+      </p>
+    </div>
+    <span class="badge priv">PRÜFEN</span>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <p class="flash {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">
+        {{ '⛔ ' if category == 'error' else '✅ ' }}{{ message }}
+      </p>
+    {% endfor %}
+  {% endwith %}
+
+  <section class="album">
+    <h2>Von dir markiert ({{ manual|length }})</h2>
+    <p class="hint muted">
+      Im Lightbox auf „Tiefenproblem melden“ klicken, kurz beschreiben, was falsch aussieht.
+      Die Notiz bleibt hier stehen, bis du „Problem behoben“ wählst.
+    </p>
+    {% if manual %}
+    <div class="depth-grid">
+      {% for item in manual %}{{ depth_tile(item, csrf) }}{% endfor %}
+    </div>
+    {% else %}
+    <p class="empty">Keine markierten Tiefenprobleme.</p>
+    {% endif %}
+  </section>
+
+  <section class="album">
+    <h2>Ohne Tiefenbild ({{ auto|length }})</h2>
+    <p class="hint muted">
+      Stereo-Fotos, für die der Build keine <code>depth.jpg</code> erzeugt hat. Sie bleiben
+      sichtbar (flaches Foto), brauchen aber eine neue Tiefenkarte. Ein Build mit
+      <code>--force</code> und Depth-Anything-V2 rendert sie neu.
+    </p>
+    {% if auto %}
+    <div class="depth-grid">
+      {% for item in auto %}{{ depth_tile(item, csrf) }}{% endfor %}
+    </div>
+    {% else %}
+    <p class="empty">Alle Stereo-Fotos haben eine Tiefenkarte.</p>
+    {% endif %}
+  </section>
+
+  {% if stale %}
+  <p class="hint muted">{{ stale }} Markierung{% if stale != 1 %}en{% endif %}
+    verweisen auf Fotos, die nicht mehr im Build sind. Sie werden nicht angezeigt und
+    können beim nächsten Aufräumen entfernt werden.</p>
+  {% endif %}
+</main>
+
+{% include "_lightbox.html" %}
+{% endblock %}

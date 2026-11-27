@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% from "_macros.html" import badge, upload_form %}
+{% block body %}
+<header class="top">
+  <div class="brand">randompics · Verwaltung</div>
+  <div class="row" style="margin:0">
+    <span class="muted">{{ user }}</span>
+    <a href="https://randompics.de/" target="_blank" rel="noopener">Seite ansehen ↗</a>
+    <form method="post" action="/admin/logout" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Abmelden</button>
+    </form>
+  </div>
+</header>
+
+<main>
+  <h1 class="sr-only">randompics · Verwaltung</h1>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <p class="flash {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">
+        {{ '⛔ ' if category == 'error' else '✅ ' }}{{ message }}
+      </p>
+    {% endfor %}
+  {% endwith %}
+
+  <p class="muted">
+    {{ public_total }} Fotos öffentlich · {{ private_total }} privat ·
+    {{ share_count }} Link{% if share_count != 1 %}s{% endif %} aktiv.
+    Löschen ist endgültig: Render-Dateien, Original, Score und Kopien in Links werden entfernt.
+  </p>
+
+  <div class="tool-grid">
+    <section class="album">
+      <h2>Fotos hinzufügen</h2>
+      {{ upload_form(albums, csrf) }}
+    </section>
+
+    <section class="album">
+      <h2>Neues Album</h2>
+      <form method="post" action="/admin/album/new" class="form-grid">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="field">
+          <label class="muted" for="new-label">Name</label>
+          <input id="new-label" type="text" name="label" placeholder="Name" required>
+        </div>
+        <div class="field">
+          <label class="muted" for="new-sub">Untertitel</label>
+          <input id="new-sub" type="text" name="sub" placeholder="Optional">
+        </div>
+        <div class="field">
+          <label class="muted" for="new-url">Link</label>
+          <input id="new-url" type="text" name="url" placeholder="Optional">
+        </div>
+        <div class="form-actions">
+          <label class="muted check"><input type="checkbox" name="private" value="1" checked> privat</label>
+          <button type="submit">Album anlegen</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <section class="album">
+    <h2>Ähnliche Fotos</h2>
+    {% if duplicate_total %}
+      <p class="muted" style="margin:.2rem 0 .5rem">
+        {{ duplicate_total }} offene Paare mit NCC-Ähnlichkeit ≥ 90 %.
+        {% if duplicate_stale %}· {{ duplicate_stale }} Paare verweisen auf gelöschte Fotos und werden ausgeblendet.{% endif %}
+        {% if dismissed %}· {{ dismissed }} Paar{% if dismissed != 1 %}e{% endif %} ausgeblendet.{% endif %}
+      </p>
+    {% else %}
+      <p class="muted" style="margin:.2rem 0 .5rem">
+        Keine offenen Paare.
+        {% if duplicate_stale %}· {{ duplicate_stale }} Paare mit gelöschten Fotos werden ausgeblendet.{% endif %}
+        {% if dismissed %}· {{ dismissed }} Paar{% if dismissed != 1 %}e{% endif %} ausgeblendet.{% endif %}
+      </p>
+    {% endif %}
+    <a class="button-link" href="/admin/duplicates">Duplikate prüfen →</a>
+    <a class="button-link" href="/admin/similar">Nach Gruppen →</a>
+  </section>
+
+  <section class="album">
+    <h2>Tiefenprobleme</h2>
+    {% if depth_manual or depth_auto %}
+      <p class="muted" style="margin:.2rem 0 .5rem">
+        {{ depth_manual }} von dir markiert · {{ depth_auto }} ohne Tiefenbild.
+        {% if depth_stale %}· {{ depth_stale }} verwaiste Markierung{% if depth_stale != 1 %}en{% endif %}.{% endif %}
+      </p>
+    {% else %}
+      <p class="muted" style="margin:.2rem 0 .5rem">Keine Tiefenprobleme markiert.</p>
+    {% endif %}
+    <a class="button-link" href="/admin/depth">Tiefenprobleme prüfen →</a>
+  </section>
+
+  <section class="album">
+    <div class="index-head">
+      <h2>Alben ({{ albums|length }})</h2>
+      <input id="album-filter" type="search" placeholder="Album filtern …" aria-label="Alben filtern">
+    </div>
+    <div class="album-grid" id="album-grid">
+      {% for album in albums %}
+      <article class="album-card" data-search="{{ (album.label ~ ' ' ~ album.slug)|lower }}">
+        <a class="album-cover" href="/admin/album/{{ album.slug }}" aria-label="{{ album.label }} öffnen">
+          {% if album.cover %}
+          <img src="/admin/media/{{ album.cover.tree }}/{{ album.cover.id }}/thumb.jpg"
+               alt="" loading="lazy" width="480" height="360">
+          {% else %}
+          <span class="cover-empty">leer</span>
+          {% endif %}
+        </a>
+        <div class="album-body">
+          <h3><a href="/admin/album/{{ album.slug }}">{{ album.label }}</a></h3>
+          {{ badge(album) }}
+          <p class="muted">
+            {{ album.slug }} · {{ album.count }} Foto{% if album.count != 1 %}s{% endif %}{% if album.published %} · {{ album.published }} veröffentlicht{% endif %}
+          </p>
+          <p class="muted">
+            {{ album.shares|length }} Link{% if album.shares|length != 1 %}s{% endif %}
+            {% if album.gate %}· Gate {{ '%.1f'|format(album.gate) }}{% endif %}
+          </p>
+          <a class="button-link" href="/admin/album/{{ album.slug }}">Öffnen →</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    <p id="album-empty" class="empty" hidden>Kein Album gefunden.</p>
+  </section>
+
+  <footer class="note">
+    Öffentliche Alben liegen in <code>build/</code> und werden deployt; private in
+    <code>build-private/</code> und erscheinen nur unter /s/&lt;token&gt;/.
+    Löschen entfernt das Foto endgültig: Render-Dateien, Original in
+    <code>source/Valencia</code>, Album-Zuordnung, Score und Kopien in Links.
+  </footer>
+</main>
+
+<script>
+(function () {
+  const filter = document.getElementById("album-filter");
+  const grid = document.getElementById("album-grid");
+  const empty = document.getElementById("album-empty");
+  if (!filter || !grid) return;
+  const cards = Array.from(grid.querySelectorAll(".album-card"));
+  filter.addEventListener("input", function () {
+    const query = filter.value.trim().toLowerCase();
+    let visible = 0;
+    cards.forEach(function (card) {
+      const hit = !query || (card.dataset.search || "").includes(query);
+      card.hidden = !hit;
+      if (hit) visible += 1;
+    });
+    empty.hidden = visible > 0 || cards.length === 0;
+  });
+})();
+</script>
+{% endblock %}

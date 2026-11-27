@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Ähnliche Gruppen · randompics{% endblock %}
+{% from "_macros.html" import photo_tile %}
+{% block body %}
+<header class="top">
+  <div class="brand">randompics · Verwaltung</div>
+  <div class="row" style="margin:0">
+    <span class="muted">{{ user }}</span>
+    <a href="/admin/">Alben</a>
+    <a href="/admin/duplicates">Paare</a>
+    <a href="/admin/depth">Tiefenprobleme</a>
+    <a href="https://randompics.de/" target="_blank" rel="noopener">Seite ansehen ↗</a>
+    <form method="post" action="/admin/logout" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Abmelden</button>
+    </form>
+  </div>
+</header>
+
+<main>
+  <a class="back" href="/admin/duplicates">← Paar-Ansicht</a>
+  <div class="album-head">
+    <div>
+      <h1 style="margin:0 0 .2rem">Ähnliche Gruppen</h1>
+      <p class="muted" style="margin:0">
+        {{ groups|length }} Gruppe{% if groups|length != 1 %}n{% endif %} aus
+        {{ pair_total }} Paar{% if pair_total != 1 %}en{% endif %} mit Ähnlichkeit ≥ 90 %.
+      </p>
+    </div>
+    <span class="badge mixed">GRUPPEN</span>
+  </div>
+
+  <p class="hint muted">
+    „behalten“ ist eine Score-Empfehlung, keine automatische Entscheidung.
+    Bei gleichem Score oder fehlenden Scores gibt es keine Empfehlung.
+    Prüfe die Bilder nebeneinander; jedes andere Foto der Gruppe kannst du einzeln löschen.
+    Löschen ist endgültig (Render-Datei, Original, Score, Kopien in Links).
+  </p>
+
+  {% if groups %}
+    {% for group in groups %}
+    <section class="album">
+      <div class="index-head">
+        <h2>Gruppe {{ loop.index }} · {{ group.photos|length }} Fotos</h2>
+        <span class="badge mixed">max. {{ '%.1f'|format(group.sim) }} % ähnlich</span>
+        {% if group.keeper %}<span class="badge">EMPFIEHLUNG</span>
+        {% elif group.tie %}<span class="badge">GLEICHE WERTUNG</span>
+        {% else %}<span class="badge">KEINE WERTUNG</span>{% endif %}
+      </div>
+      <div class="grid">
+        {% for photo in group.photos %}
+          {{ photo_tile(photo, photo.album, csrf, 'similar',
+                        label=group.labels[photo.id],
+                        album_label=photo.album_label, allow_visibility=False,
+                        allow_delete=True) }}
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  {% else %}
+    <p class="empty">Keine Gruppen mit Ähnlichkeit ≥ 90 %.</p>
+  {% endif %}
+</main>
+
+{% include "_lightbox.html" %}
+{% endblock %}

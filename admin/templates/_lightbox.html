@@ -1,0 +1,157 @@
+<div id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Foto-Vorschau">
+  <button type="button" class="lightbox-close">Schließen</button>
+  <button type="button" class="lightbox-depth" id="lightbox-depth" aria-pressed="false">Tiefenproblem melden</button>
+  <button type="button" class="lightbox-nav prev" aria-label="Vorheriges Foto">‹</button>
+  <iframe id="lightbox-frame" title="Foto-Vorschau" src="about:blank"></iframe>
+  <button type="button" class="lightbox-nav next" aria-label="Nächstes Foto">›</button>
+  <p id="lightbox-caption" aria-live="polite"></p>
+</div>
+
+<script>
+(function () {
+  const box = document.getElementById("lightbox");
+  const frame = document.getElementById("lightbox-frame");
+  const caption = document.getElementById("lightbox-caption");
+  const closeButton = box.querySelector(".lightbox-close");
+  const depthButton = document.getElementById("lightbox-depth");
+  const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+  const prevButton = box.querySelector(".lightbox-nav.prev");
+  const nextButton = box.querySelector(".lightbox-nav.next");
+  let tiles = [];
+  let index = 0;
+  let lastFocus = null;
+
+  function visibleTiles() {
+    return Array.from(document.querySelectorAll(".thumb")).filter(function (button) {
+      const tile = button.closest(".tile");
+      return tile && !tile.hidden;
+    });
+  }
+
+  function applyDepth(button, flagged, note) {
+    button.dataset.depthFlag = flagged ? "1" : "0";
+    if (note !== undefined) button.dataset.depthNote = note;
+    const tile = button.closest(".tile");
+    const badge = tile ? tile.querySelector(".depth-badge") : null;
+    if (badge) badge.hidden = !flagged;
+    if (button !== tiles[index]) return;
+    depthButton.textContent = flagged ? "✓ Tiefenproblem (zurücknehmen)" : "Tiefenproblem melden";
+    depthButton.setAttribute("aria-pressed", flagged ? "true" : "false");
+  }
+
+  function setDepthState(flagged, note) {
+    const button = tiles[index];
+    if (button) applyDepth(button, flagged, note);
+  }
+
+  function openAt(nextIndex) {
+    if (!tiles.length) return;
+    index = (nextIndex + tiles.length) % tiles.length;
+    const button = tiles[index];
+    frame.src = "/admin/preview/" + button.dataset.tree + "/" + button.dataset.id;
+    caption.textContent = button.dataset.caption || button.dataset.id;
+    setDepthState(button.dataset.depthFlag === "1", button.dataset.depthNote || "");
+  }
+
+  function open(button) {
+    tiles = visibleTiles();
+    lastFocus = document.activeElement;
+    box.hidden = false;
+    document.body.classList.add("modal-open");
+    openAt(tiles.indexOf(button));
+    closeButton.focus();
+  }
+
+  function close() {
+    if (box.hidden) return;
+    box.hidden = true;
+    frame.src = "about:blank";
+    caption.textContent = "";
+    document.body.classList.remove("modal-open");
+    if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
+  }
+
+  async function toggleDepth() {
+    const button = tiles[index];
+    if (!button) return;
+    const flagged = button.dataset.depthFlag === "1";
+    let note = button.dataset.depthNote || "";
+    if (flagged) {
+      if (!window.confirm("Tiefenproblem als behoben markieren?")) return;
+    } else {
+      const entered = window.prompt("Was ist mit der Tiefenkarte falsch? (optional)", note);
+      if (entered === null) return;
+      note = entered.trim();
+    }
+    const body = new FormData();
+    body.set("csrf", csrfMeta ? csrfMeta.content : "");
+    body.set("id", button.dataset.id);
+    body.set("action", flagged ? "clear" : "flag");
+    body.set("note", note);
+    depthButton.disabled = true;
+    try {
+      const response = await fetch("/admin/depth/flag", {
+        method: "POST",
+        body: body,
+        headers: {"X-Requested-With": "fetch"}
+      });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const data = await response.json();
+      applyDepth(button, data.flagged, data.note || "");
+    } catch (error) {
+      window.alert("Tiefenproblem konnte nicht gespeichert werden.");
+    } finally {
+      depthButton.disabled = false;
+    }
+  }
+
+  document.addEventListener("click", function (event) {
+    const thumb = event.target.closest(".thumb");
+    if (thumb) {
+      event.preventDefault();
+      open(thumb);
+      return;
+    }
+    if (event.target === box || event.target.closest(".lightbox-close")) close();
+  });
+
+  depthButton.addEventListener("click", toggleDepth);
+  prevButton.addEventListener("click", function () { openAt(index - 1); });
+  nextButton.addEventListener("click", function () { openAt(index + 1); });
+
+  document.addEventListener("keydown", function (event) {
+    if (box.hidden) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      openAt(index - 1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      openAt(index + 1);
+    } else if (event.key === "Tab") {
+      const focusables = [closeButton, depthButton, prevButton, nextButton];
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  });
+
+  document.addEventListener("focusin", function (event) {
+    if (!box.hidden && !box.contains(event.target)) closeButton.focus();
+  });
+
+  window.addEventListener("message", function (event) {
+    if (event.origin !== location.origin || !event.data) return;
+    if (event.data.type === "rp-close") close();
+    if (event.data.type === "rp-nav") openAt(index + (event.data.dir > 0 ? 1 : -1));
+  });
+})();
+</script>

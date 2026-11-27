@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>randompics.de · Stereofotos</title>
+<meta name="description" content="Stereofotos aus Valencia, in zwei Alben — als 2.5D-Ansicht und als SBS-Paar für 3D-Brillen im Browser.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=20261127a">
+</head>
+<body>
+
+<section id="albums-view">
+  <header class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">Ein Fotobuch</p>
+      <h1>Valencia</h1>
+      <p class="dates">1. November 2026 · L'Oceanogràfic &amp; Ciutat de les Arts</p>
+      <p class="lede"><strong><span id="total">130</span> Stereofotos</strong>, gesammelt an einem
+        Tag zwischen Aquarien, weißen Bögen und Abendlicht.</p>
+      <p class="hint3d"><strong>Alle Fotos sind 3D.</strong> Maus bewegen oder Handy neigen
+        für den Tiefeneffekt · die 3D-Brille zeigt das Stereopaar (SBS).</p>
+    </div>
+    <figure class="hero-demo">
+      <div class="wiggle" data-photo="20261101-105707"></div>
+      <figcaption>Stereopaar · linkes und rechtes Auge im Wechsel — daraus entsteht die 2.5D-Tiefe</figcaption>
+    </figure>
+  </header>
+
+  <main id="album-cards" class="album-cards" aria-label="Alben"></main>
+
+  <p class="all-link"><a href="#album=all">Alle <span id="cta-total">130</span> Fotos ansehen →</a></p>
+
+  <footer class="hero-foot">
+    <span>Fotos: Frank Feinbube</span>
+    <span>Tiefe: Depth Anything V2, gerendert als Mesh im Browser</span>
+  </footer>
+</section>
+
+<section id="gallery-view" hidden>
+  <header class="gallery-head">
+    <a class="back" href="#">← Alben</a>
+    <div>
+      <h2 id="album-title">Album</h2>
+      <p id="album-sub"></p>
+    </div>
+  </header>
+
+  <nav id="albums" class="albums" aria-label="Alben"></nav>
+  <main id="grid" class="grid" aria-label="Fotogalerie"></main>
+
+  <footer class="foot">
+    <span>Fotos: Frank Feinbube · November 2026</span>
+    <span>Stereo-Depth: Depth Anything V2 · Mesh im Browser</span>
+  </footer>
+</section>
+
+<div id="viewer" class="viewer" hidden>
+  <canvas id="view" aria-label="2.5D-Ansicht des Stereofotos"></canvas>
+  <img id="fallback" alt="" hidden>
+
+  <header class="hud hud-top">
+    <h2 id="title">Foto</h2>
+    <p id="source"></p>
+  </header>
+
+  <div id="loading" class="loading">lädt …</div>
+
+  <nav class="hud hud-bottom" aria-label="Ansicht steuern">
+    <button id="prev" class="ctl btn" aria-label="Vorheriges Foto">←</button>
+    <label class="ctl">
+      <span>Tiefe</span>
+      <input id="strength" type="range" min="0" max="200" value="100" step="5">
+    </label>
+    <button id="sway" class="ctl btn" aria-pressed="true">Bewegung</button>
+    <button id="depth" class="ctl btn" aria-pressed="false">Tiefenkarte</button>
+    <button id="sbs" class="ctl btn" aria-pressed="false" title="Side-by-Side für XREAL und 3D-Displays">3D-Brille</button>
+    <button id="full" class="ctl btn">Vollbild</button>
+    <button id="next" class="ctl btn" aria-label="Nächstes Foto">→</button>
+    <button id="close" class="ctl btn" aria-label="Zurück zur Übersicht">✕</button>
+  </nav>
+
+  <p id="hint" class="hint hud">Maus bewegen · ← → · „3D-Brille" = SBS für XREAL · Esc = zurück</p>
+  <img id="sbsview" alt="Original-Stereobild, Seite an Seite" hidden>
+</div>
+
+<script src="viewer.js?v=20261125a"></script>
+<script src="app.js?v=20261127a"></script>
+</body>
+</html>

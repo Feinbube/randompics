@@ -1,0 +1,13 @@
+build/
+build-private/
+source/
+.venv*/
+__pycache__/
+*.pyc
+.hermes.md
+admin.json
+shares.json
+scores.json
+gates.json
+covers.json
+covers-unsafe.json
