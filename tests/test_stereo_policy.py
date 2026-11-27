@@ -89,10 +89,20 @@ class StereoPolicyTest(unittest.TestCase):
             {"id": "20261101-164119", "album": "oceanografic"},
             {"id": "20260609-165238", "album": "kamera-09-06-2026-11-06-2026"},
         ]
-        covers = build.covers_for(existing)
+        covers = build.covers_for(existing, pins={})
         self.assertEqual(covers["forum"], "20261102-153826")
         self.assertEqual(covers["oceanografic"], "20261101-121758")
         self.assertEqual(covers["kamera-09-06-2026-11-06-2026"], "20260609-165238")
+
+    def test_cover_pin_wins_and_invalid_pin_falls_back(self):
+        existing = [
+            {"id": "20261101-121758", "album": "oceanografic"},
+            {"id": "20261101-164119", "album": "oceanografic"},
+        ]
+        pinned = build.covers_for(existing, pins={"oceanografic": "20261101-164119"})
+        self.assertEqual(pinned["oceanografic"], "20261101-164119")
+        fallback = build.covers_for(existing, pins={"oceanografic": "20260101-000000"})
+        self.assertEqual(fallback["oceanografic"], "20261101-121758")
 
     def test_private_build_skips_public_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,7 +157,7 @@ class StereoPolicyTest(unittest.TestCase):
             overrides = {"20260101-120000": "mixed", "20260101-120001": "mixed"}
             self.assertEqual(build.jobs(source, shots, None, private={"mixed"},
                                         overrides=overrides), [])
-            covers = build.covers_for([{"id": "20260101-120000", "album": "mixed"}])
+            covers = build.covers_for([{"id": "20260101-120000", "album": "mixed"}], pins={})
             self.assertEqual(covers["mixed"], "20260101-120000")
 
     def test_non_sbs_file_round_trip(self):

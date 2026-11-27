@@ -107,10 +107,22 @@
   .tile img { display:block; width:100%; height:auto; aspect-ratio:4/3; object-fit:cover; }
   .tile .meta { display:flex; flex-direction:column; gap:.35rem; padding:.45rem;
     font-size:.75rem; color:var(--muted); }
+  .pick { display:flex; align-items:center; gap:.35rem; font-size:.72rem; color:var(--muted); }
+  .pick input { margin:0; }
+  .move-bar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;
+    padding:.6rem .7rem; border:1px dashed var(--line); border-radius:8px; margin:.4rem 0 .2rem; }
+  .move-bar label { font-size:.82rem; }
+  .move-bar select { min-width:14rem; }
+  .move-hint { margin:.2rem 0 .6rem; }
   .tile .score { line-height:1.35; overflow-wrap:anywhere; }
   .tile-actions { display:flex; gap:.35rem; flex-wrap:wrap; }
   .tile-actions form { margin:0; }
   .tile-actions button { padding:.25rem .45rem; font-size:.72rem; min-height:30px; }
+  .action-status { flex-basis:100%; font-size:.72rem; color:var(--muted); }
+  .action-status[hidden] { display:none; }
+  .cover-badge { display:inline-block; margin-top:.15rem; padding:.05rem .35rem; border-radius:999px;
+    font-size:.68rem; font-weight:700; letter-spacing:.05em; border:1px solid #6b542f; color:var(--warn); }
+  .cover-current { display:inline-flex; align-items:center; font-size:.72rem; color:var(--warn); }
   .badge.depth { color:var(--warn); border-color:#6b542f; }
   .depth-badge { display:block; color:var(--warn); font-size:.78rem; margin-top:.15rem; }
   .depth-badge[hidden] { display:none; }
@@ -190,6 +202,7 @@
     select, textarea { min-height:44px; }
     input[type=checkbox], input[type=radio] { width:22px; height:22px; }
     .check { display:inline-flex; align-items:center; gap:.4rem; min-height:44px; }
+    .pick { min-height:44px; }
   }
 </style>
 </head>
@@ -234,6 +247,143 @@
     if (!window.confirm(form.dataset.confirm)) {
       event.preventDefault();
       event.stopImmediatePropagation();
+    }
+  });
+
+  function setText(id, value) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = String(value);
+  }
+
+  function updateAlbumSummary(album) {
+    if (!album) return;
+    setText("album-count", album.count);
+    setText("album-published", album.published);
+    const split = document.getElementById("album-split");
+    const mixed = Number(album.public) > 0 && Number(album.private) > 0;
+    if (split) {
+      split.hidden = !mixed;
+      setText("album-public", album.public);
+      setText("album-private", album.private);
+    }
+    const badge = document.querySelector("#album-badge .badge");
+    if (!badge) return;
+    if (Number(album.public) === 0) {
+      badge.className = "badge priv";
+      badge.textContent = "PRIVAT";
+    } else if (mixed) {
+      badge.className = "badge mixed";
+      badge.textContent = "GEMISCHT · " + album.private + " privat";
+    } else {
+      badge.className = "badge pub";
+      badge.textContent = "ÖFFENTLICH";
+    }
+  }
+
+  document.addEventListener("submit", function (event) {
+    if (event.defaultPrevented) return;
+    const form = event.target.closest("form[data-photo-visibility]");
+    if (!form || !window.fetch) return;
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    const mode = form.querySelector('input[name="mode"]');
+    const tile = form.closest(".tile");
+    const thumb = tile ? tile.querySelector(".thumb") : null;
+    const status = tile ? tile.querySelector(".action-status") : null;
+    if (!button || !mode) return;
+    const original = button.textContent;
+    const target = mode.value;
+    button.disabled = true;
+    button.textContent = target === "public" ? "Wird öffentlich …" : "Wird privat …";
+    if (status) {
+      status.hidden = true;
+      status.textContent = "";
+    }
+    fetch(form.action, {
+      method: "POST",
+      body: new FormData(form),
+      headers: {"X-Requested-With": "fetch"},
+      credentials: "same-origin"
+    }).then(function (response) {
+      return response.json().catch(function () {
+        return {};
+      }).then(function (data) {
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ("HTTP " + response.status));
+        }
+        return data;
+      });
+    }).then(function (data) {
+      const tree = data.tree;
+      if (tree !== "public" && tree !== "private") {
+        throw new Error("Antwort ohne Sichtbarkeit");
+      }
+      if (data.cover_changed) {
+        try {
+          sessionStorage.setItem("rp-scroll:" + location.pathname + location.search,
+            String(window.scrollY));
+        } catch (error) {
+          // storage disabled: the reload starts at the top
+        }
+        window.location.reload();
+        return;
+      }
+      const nowPublic = tree === "public";
+      mode.value = nowPublic ? "private" : "public";
+      button.textContent = nowPublic ? "Privat" : "Öffentlich";
+      if (tree === "public") {
+        form.title = "Foto von randompics.de nehmen; bestehende Links bleiben unverändert.";
+      } else {
+        form.removeAttribute("title");
+      }
+      if (thumb) thumb.dataset.tree = tree;
+      if (tile) tile.dataset.tree = tree;
+      button.disabled = false;
+      if (status) {
+        let text = (data.changed ? "✅ jetzt " : "unverändert ") +
+          (nowPublic ? "öffentlich" : "privat");
+        if (data.deploy_ok === false) {
+          text = "⚠ " + (nowPublic ? "öffentlich" : "privat") +
+            " verschoben, Deploy-Fehler: " + (data.message || "unbekannt");
+        }
+        status.textContent = text;
+        status.hidden = false;
+      }
+      updateAlbumSummary(data.album);
+    }).catch(function (error) {
+      button.disabled = false;
+      button.textContent = original;
+      if (status) {
+        status.textContent = "⛔ " + error.message;
+        status.hidden = false;
+      }
+    });
+  });
+
+
+  document.addEventListener("submit", function (event) {
+    if (event.defaultPrevented) return;
+    try {
+      sessionStorage.setItem("rp-scroll:" + location.pathname + location.search,
+        String(window.scrollY));
+    } catch (error) {
+      // storage disabled: the page still works, it just returns to the top
+    }
+  });
+
+  if ("scrollRestoration" in history) {
+    history.scrollRestoration = "auto";
+  }
+
+  window.addEventListener("pageshow", function () {
+    const key = "rp-scroll:" + location.pathname + location.search;
+    try {
+      const saved = sessionStorage.getItem(key);
+      if (saved === null) return;
+      sessionStorage.removeItem(key);
+      window.setTimeout(function () { window.scrollTo(0, Number(saved)); }, 0);
+    } catch (error) {
+      // storage disabled
     }
   });
 

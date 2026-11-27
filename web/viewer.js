@@ -56,7 +56,7 @@ void main() {
     const state = {
       gl: null, prog: null, loc: {}, textures: {}, indexCount: 0,
       image: { w: 1, h: 1 }, anchor: 0.5,
-      strength: 1, sway: true, depthMode: false,
+      strength: 1, sway: true, depthMode: false, fitMode: "contain",
       parallax: 0, target: 0, lastPointer: 0,
     };
 
@@ -143,14 +143,19 @@ void main() {
     function resize() {
       if (!state.gl) return;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(window.innerWidth * dpr);
-      canvas.height = Math.round(window.innerHeight * dpr);
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(1, rect.width || window.innerWidth);
+      const height = Math.max(1, rect.height || window.innerHeight);
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
       state.gl.viewport(0, 0, canvas.width, canvas.height);
     }
 
     function fit() {
       const { w, h } = state.image;
-      const scale = Math.min(canvas.width / w, canvas.height / h);
+      const scale = state.fitMode === "cover"
+        ? Math.max(canvas.width / w, canvas.height / h)
+        : Math.min(canvas.width / w, canvas.height / h);
       return [(w * scale) / canvas.width, (h * scale) / canvas.height];
     }
 
@@ -197,6 +202,8 @@ void main() {
 
     function setStrength(value) { state.strength = value; }
 
+    function setFit(mode) { state.fitMode = mode === "cover" ? "cover" : "contain"; }
+
     function setSway(on) {
       state.sway = on;
       if (!on) state.target = state.parallax;
@@ -210,7 +217,7 @@ void main() {
       state.lastPointer = typeof value === "number" ? value : performance.now();
     }
 
-    return { load, resize, setStrength, setSway, setDepthMode, setTarget, notePointer };
+    return { load, resize, setStrength, setFit, setSway, setDepthMode, setTarget, notePointer };
   }
 
   return { create };

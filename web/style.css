@@ -98,8 +98,7 @@ body.locked { overflow: hidden; }
 
 @media (prefers-reduced-motion: reduce) {
   .wiggle img,
-  .tile img.wiggle-img,
-  .album-card img.wiggle-img { animation: none; }
+  .tile img.wiggle-img { animation: none; }
 }
 
 .hero-demo figcaption {
@@ -136,13 +135,12 @@ body.locked { overflow: hidden; }
   transition: transform 0.4s ease, box-shadow 0.4s ease;
 }
 
-.album-card img.wiggle-img {
+.album-card img.cover-img {
   width: 200%;
   max-width: none;
   height: auto;
   aspect-ratio: auto;
   object-fit: cover;
-  animation: wiggle 1.3s steps(1, end) infinite;
 }
 
 .album-card:hover img,
@@ -330,11 +328,32 @@ body.locked { overflow: hidden; }
   max-width: none;
   height: 100%;
   object-fit: cover;
-  animation: wiggle 1.3s steps(1, end) infinite;
+}
+
+.preview-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.album-card .preview-canvas {
+  height: auto;
+  aspect-ratio: 3 / 2;
+}
+
+.album-card .count,
+.album-card .meta {
+  position: relative;
+  z-index: 3;
 }
 
 .tile .badge {
   position: absolute;
+  z-index: 3;
   top: 0.55rem;
   left: 0.55rem;
   padding: 0.18rem 0.4rem;

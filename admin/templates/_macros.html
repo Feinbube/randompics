@@ -55,21 +55,31 @@
 {%- endmacro %}
 
 {% macro photo_tile(photo, album_slug, csrf, back, label=None, album_label=None,
-                    allow_visibility=True, allow_delete=True, gate=0, show_similarity=True) -%}
+                    allow_visibility=True, allow_delete=True, gate=0, show_similarity=True,
+                    allow_move=False, cover_id=None, allow_cover=False) -%}
   {% set composite = photo.score.get('composite') if photo.score else none %}
   {% set similarity = photo.score.get('similarity') if photo.score else none %}
   {% set depth_flag = photo.depth_issue|default(false) %}
   <figure class="tile"
+          data-tree="{{ photo.tree }}"
           data-search="{{ (photo.id ~ ' ' ~ (photo.stamp or '') ~ ' ' ~ (album_label or ''))|lower }}{% if depth_flag %} tiefenproblem{% endif %}"
           data-score="{{ composite if composite is not none else '' }}"
           data-similarity="{{ similarity if similarity is not none else '' }}"
           data-stamp="{{ photo.id }}">
     {{ photo_thumb(photo, album_label) }}
     <figcaption class="meta">
+      {% if allow_move %}
+      <label class="pick">
+        <input type="checkbox" form="move-form" name="ids" value="{{ photo.id }}"
+               aria-label="Foto {{ photo.stamp or photo.id }} zum Verschieben auswählen">
+        <span>auswählen</span>
+      </label>
+      {% endif %}
       <span class="score" title="{{ photo.id }}">
         {{ photo.stamp or photo.id }}
         {% if label %}<br><strong>{{ label }}</strong>{% endif %}
         {% if album_label %}<br><span class="muted">{{ album_label }}</span>{% endif %}
+        {% if cover_id and photo.id == cover_id %}<span class="cover-badge">COVER</span>{% endif %}
         <span class="depth-badge"{% if not depth_flag %} hidden{% endif %}>⚠ Tiefenproblem</span>
         {% if composite is not none %}
           <br>Score {{ '%.2f'|format(composite) }}/5
@@ -79,8 +89,21 @@
       </span>
       {% if allow_visibility or allow_delete %}
       <div class="tile-actions">
+        {% if allow_cover and photo.tree == 'public' %}
+          {% if photo.id == cover_id %}
+            <span class="cover-current">Cover ✓</span>
+          {% else %}
+            <form method="post" action="/admin/cover">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input type="hidden" name="id" value="{{ photo.id }}">
+              <input type="hidden" name="album" value="{{ album_slug }}">
+              <input type="hidden" name="back" value="{{ back }}">
+              <button type="submit">Als Cover</button>
+            </form>
+          {% endif %}
+        {% endif %}
         {% if allow_visibility %}
-        <form method="post" action="/admin/photo/visibility"
+        <form method="post" action="/admin/photo/visibility" data-photo-visibility
               {% if photo.tree == 'public' %}title="Foto von randompics.de nehmen; bestehende Links bleiben unverändert."{% endif %}>
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <input type="hidden" name="id" value="{{ photo.id }}">
@@ -105,6 +128,7 @@
           <button type="submit" class="danger">Löschen</button>
         </form>
         {% endif %}
+        <span class="action-status" role="status" hidden></span>
       </div>
       {% endif %}
     </figcaption>

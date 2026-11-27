@@ -2,8 +2,8 @@
 
 Source for [randompics.de](https://www.randompics.de/) — a small stereoscopic photo book.
 The public page shows depth-mapped SBS (side-by-side) photos: the large view is a 2.5D
-WebGL mesh, while covers and gallery thumbnails alternate the left/right eye with a CSS
-“wiggle” so the small pictures read as stereo too.
+WebGL mesh, while gallery thumbnails and album covers use the same depth mesh in a small
+hover preview driven by pointer movement. Static covers use the left eye.
 
 This repository is a **code snapshot**. It contains no private photo collections, no
 original Valencia source frames, no admin credentials and no share tokens. The two
@@ -13,9 +13,11 @@ score pipeline can be inspected without the private archive.
 ## Layout
 
 - `pipeline/` — build, render, depth, score, publish, share and deploy scripts.
-- `admin/` — Flask admin UI (login, visibility, covers, depth worklist, album tools).
-- `web/` — static gallery, 2.5D viewer (`viewer.js`) and the stereo wiggle CSS.
-- `tests/` — unit tests for stereo policy, visibility and similar-label grouping.
+- `admin/` — Flask admin UI (login, one-click visibility, cover picker, bulk album move,
+  depth worklist and album tools).
+- `web/` — static gallery, shared 2.5D mesh viewer (`viewer.js`) and the small hover previews.
+- `tests/` — unit tests for stereo policy, visibility, cover/move routes and grouping.
+- `web/covers.json` — public album-to-cover-photo mapping, generated on build/deploy.
 - `examples/` — two public Valencia photos with `scene.jpg`, `sbs.jpg`, `depth.jpg`,
   `thumb.jpg`, `thumb_sbs.jpg` and `meta.json`.
 
@@ -55,7 +57,8 @@ not to reject a photo on its own.
 
 - `web/albums.json` contains only the public album labels; the live deployment holds the
   full private data outside Git.
-- Admin credentials, `shares.json`, `scores.json`, `covers.json` and `source/` are
-  intentionally excluded.
-- The favicon is `web/favicon.svg`; the gallery wiggle honours
-  `prefers-reduced-motion`.
+- Admin credentials, the admin cover pins (`/srv/randompics/covers.json`), `shares.json`,
+  `scores.json` and `source/` are intentionally excluded; `web/covers.json` is only the
+  public mapping.
+- The favicon is `web/favicon.svg`; the small 2.5D previews use the same `RPViewer` mesh as
+  the large view and only run while the pointer is over a tile/card.

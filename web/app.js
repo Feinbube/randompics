@@ -4,7 +4,17 @@
 // Album labels live in albums.json (shared with the admin UI). A private share
 // injects window.RP_ALBUM before this file loads and overrides its album.
 let ALBUM_META = {};
+let COVER_IDS = {};
 const ALBUM_LABELS = { all: "Alle" };
+
+async function loadCoverIds() {
+  try {
+    const response = await fetch("covers.json", { cache: "no-cache" });
+    if (response.ok) COVER_IDS = await response.json();
+  } catch (error) {
+    COVER_IDS = {};
+  }
+}
 
 async function loadAlbumMeta() {
   try {
@@ -61,6 +71,10 @@ const state = {
   cache: new Map(),
   photo: null,
   viewer: null,
+  preview: null,
+  previewViewer: null,
+  previewCanvas: null,
+  previewToken: 0,
 };
 
 const photoUrl = (id, file) => `photos/${id}/${file}`;
@@ -89,19 +103,13 @@ function renderGrid() {
     tile.setAttribute("aria-label", `Foto ${photo.id}`);
 
     const img = document.createElement("img");
-    const stereo = Boolean(photo.ok && !photo.single);
-    img.src = photoUrl(photo.id, stereo ? "thumb_sbs.jpg" : "thumb.jpg");
-    if (stereo) {
-      img.className = "wiggle-img";
-      img.onerror = () => {
-        img.onerror = null;
-        img.src = photoUrl(photo.id, "sbs.jpg");
-      };
-    }
+    img.src = photoUrl(photo.id, "thumb.jpg");
     img.alt = "";
     img.loading = "lazy";
-    img.width = stereo ? 960 : 480;
-    img.height = stereo ? 358 : 360;
+    img.width = 480;
+    img.height = 360;
+    tile.dataset.photo = photo.id;
+    tile.dataset.depth = photo.ok ? "1" : "0";
     tile.appendChild(img);
 
     const badge = document.createElement("span");
@@ -168,8 +176,9 @@ function renderAlbumCards() {
     const card = document.createElement("a");
     card.className = "album-card";
     card.href = `#album=${slug}`;
+    card.dataset.cover = COVER_IDS[slug] || "";
     card.innerHTML = `
-      <img class="wiggle-img" src="covers/${slug}.jpg?v=20261127a" alt="" loading="lazy">
+      <img class="cover-img" src="covers/${slug}.jpg?v=20261127a" alt="" loading="eager" width="2400" height="800">
       <span class="shade"></span>
       <span class="count">${counts[slug]} Fotos</span>
       <span class="meta"><h2>${meta.label}</h2><p class="sub">${meta.sub}</p></span>`;
@@ -197,7 +206,96 @@ function mountHeroWiggle() {
   box.appendChild(img);
 }
 
+/* ---------- small 2.5D previews ---------- */
+
+function findPreviewTarget(node) {
+  return node.closest(".tile[data-photo], .album-card[data-cover]");
+}
+
+function previewPhotoId(target) {
+  return target.dataset.photo || target.dataset.cover || "";
+}
+
+function hidePreview() {
+  state.previewToken += 1;
+  state.preview = null;
+  if (state.previewCanvas) {
+    state.previewCanvas.remove();
+    state.previewCanvas.hidden = true;
+  }
+  for (const node of document.querySelectorAll(".previewing")) {
+    node.classList.remove("previewing");
+  }
+}
+
+function updatePreviewTarget(target, event) {
+  if (!state.preview || state.preview.target !== target || !state.preview.viewer) return;
+  const rect = target.getBoundingClientRect();
+  const x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+  state.preview.viewer.setTarget(-x);
+  state.preview.viewer.notePointer();
+}
+
+async function showPreview(target) {
+  if (!target || !window.RPViewer) return;
+  const id = previewPhotoId(target);
+  const photo = state.manifest.find((row) => row.id === id);
+  if (!photo || !photo.ok) return;
+  if (state.preview && state.preview.target === target && state.preview.id === id) return;
+
+  hidePreview();
+  const token = state.previewToken;
+  const canvas = state.previewCanvas || document.createElement("canvas");
+  state.previewCanvas = canvas;
+  canvas.className = "preview-canvas";
+  canvas.setAttribute("aria-hidden", "true");
+  canvas.hidden = false;
+  target.appendChild(canvas);
+  target.classList.add("previewing");
+  state.preview = { target, id, viewer: null, photo };
+
+  try {
+    const [scene, depth] = await Promise.all([
+      loadImage(photoUrl(id, "scene.jpg")),
+      loadImage(photoUrl(id, "depth.jpg")),
+    ]);
+    if (state.previewToken !== token || state.preview?.target !== target) return;
+    if (!state.previewViewer) state.previewViewer = RPViewer.create(canvas);
+    const viewer = state.previewViewer;
+    if (!viewer.load(scene, depth, photo.anchor)) {
+      hidePreview();
+      return;
+    }
+    viewer.setStrength(1.15);
+    viewer.setFit("cover");
+    viewer.setSway(false);
+    viewer.setTarget(0);
+    state.preview.viewer = viewer;
+  } catch (error) {
+    hidePreview();
+  }
+}
+
+function wirePreviews() {
+  for (const root of [ui.grid, ui.albumCards]) {
+    root.addEventListener("pointerover", (event) => {
+      const target = findPreviewTarget(event.target);
+      if (target) showPreview(target);
+    });
+    root.addEventListener("pointermove", (event) => {
+      const target = findPreviewTarget(event.target);
+      if (target) updatePreviewTarget(target, event);
+    });
+    root.addEventListener("pointerout", (event) => {
+      const target = findPreviewTarget(event.target);
+      const next = event.relatedTarget;
+      if (target && !(next instanceof Node && target.contains(next))) hidePreview();
+    });
+  }
+}
+
 function showAlbums() {
+  hidePreview();
   ui.albumsView.hidden = false;
   ui.galleryView.hidden = true;
   closeViewer();
@@ -205,6 +303,7 @@ function showAlbums() {
 }
 
 function showGallery(slug) {
+  hidePreview();
   ui.albumsView.hidden = true;
   ui.galleryView.hidden = false;
   closeViewer();
@@ -433,13 +532,18 @@ function wireUi() {
     }
   });
 
-  window.addEventListener("resize", () => { if (state.viewer) state.viewer.resize(); });
+  window.addEventListener("resize", () => {
+    if (state.viewer) state.viewer.resize();
+    if (state.previewViewer) state.previewViewer.resize();
+  });
   window.addEventListener("hashchange", route);
 }
 
 async function init() {
   wireUi();
+  wirePreviews();
   await loadAlbumMeta();
+  await loadCoverIds();
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
     state.sway = false;
     setPressed(ui.sway, false);

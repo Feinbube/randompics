@@ -40,6 +40,7 @@ CONFIG_FILE = STATE / "admin.json"
 AUDIT_FILE = STATE / "admin-audit.log"
 DISMISS_FILE = STATE / "duplicate-ignore.json"
 DEPTH_FILE = STATE / "depth-issues.json"
+COVERS_FILE = STATE / "covers.json"
 PHOTO_ID = re.compile(r"^\d{8}-\d{6}$")
 MEDIA_ROOTS = {"public": REPO / "build" / "photos",
                "private": REPO / "build-private" / "photos"}
@@ -67,7 +68,9 @@ app.config.update(
 ATTEMPTS: list[float] = []          # global: only one admin, all requests come via the proxy
 WINDOW, LIMIT = 15 * 60, 5
 UPLOAD_LOCK = threading.Lock()      # one render batch at a time
+MUTATION_LOCK = threading.Lock()    # serializes upload, visibility, removal and album moves
 DEPTH_LOCK = threading.Lock()       # one read-modify-write of depth marks at a time
+COVER_LOCK = threading.Lock()       # one read-modify-write of cover pins at a time
 
 
 def audit(action: str, detail: str) -> None:
@@ -115,11 +118,40 @@ def album_labels() -> dict:
         return {}
 
 
+def album_choices(current: str | None = None) -> list[dict]:
+    """All albums except the current one, with their visibility label."""
+    labels = album_labels()
+    catalog = library.catalog()
+    slugs = set(labels) | set(catalog)
+    private = library.read_private()
+    return [
+        {"slug": slug,
+         "label": labels.get(slug, {}).get("label", slug),
+         "is_private": slug in private or bool(catalog.get(slug, {}).get("is_private")),
+         "mixed": bool(catalog.get(slug, {}).get("mixed"))}
+        for slug in sorted(slugs)
+        if slug != current
+    ]
+
+
 def fmt_expiry(value: str) -> str:
     try:
         return datetime.fromisoformat(value).strftime("%d.%m.%Y")
     except ValueError:
         return value
+
+
+def deploy_with_retry(skip_covers: bool = False, allow_empty: bool = False) -> tuple[bool, str]:
+    """One retry for a transient deploy failure; the local tree is already committed."""
+    result: tuple[bool, str] = (False, "")
+    for _ in range(2):
+        try:
+            result = library.deploy(skip_covers=skip_covers, allow_empty=allow_empty)
+        except (OSError, subprocess.SubprocessError) as exc:
+            result = (False, f"{type(exc).__name__}: {exc}")
+        if result[0]:
+            return result
+    return result
 
 
 def photo_stamp(pid: str) -> str:
@@ -179,6 +211,59 @@ def save_depth_issues(issues: dict[str, dict]) -> None:
     tmp.replace(DEPTH_FILE)
 
 
+def load_cover_pins() -> dict[str, str]:
+    try:
+        raw = json.loads(COVERS_FILE.read_text())
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(slug): str(pid) for slug, pid in raw.items()
+            if isinstance(slug, str) and isinstance(pid, str)}
+
+
+def save_cover_pins(pins: dict[str, str]) -> None:
+    COVERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = COVERS_FILE.with_name(f".{COVERS_FILE.name}.{secrets.token_hex(4)}.tmp")
+    tmp.write_text(json.dumps(pins, indent=1, sort_keys=True) + "\n")
+    os.chmod(tmp, 0o600)
+    tmp.replace(COVERS_FILE)
+
+
+def drop_cover_pin(album: str | None = None, pid: str | None = None) -> bool:
+    """Forget a pin after its photo is deleted, or one album's pin."""
+    with COVER_LOCK:
+        pins = load_cover_pins()
+        before = dict(pins)
+        if album:
+            pins.pop(album, None)
+        if pid:
+            pins = {slug: value for slug, value in pins.items() if value != pid}
+        if pins != before:
+            save_cover_pins(pins)
+            return True
+        return False
+
+
+def refresh_cover(album: str) -> tuple[bool, str]:
+    """Regenerate the public cover after its pinned photo stops being public."""
+    summary = album_summary(album)
+    if not summary:
+        return True, ""
+    cover = summary.get("cover")
+    target = REPO / "build" / "covers" / f"{album}.jpg"
+    if not cover or cover.get("tree") != "public":
+        target.unlink(missing_ok=True)
+        return library.deploy()
+    command = [str(SBS_PYTHON), str(REPO / "pipeline" / "covers.py"),
+               "--album", album, "--id", cover["id"], "--build", str(REPO / "build")]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        lines = (result.stdout + result.stderr).strip().splitlines()
+        return False, (lines[-1] if lines else "Cover-Neuerzeugung fehlgeschlagen")
+    return library.deploy()
+
+
 def fmt_updated(value: str) -> str:
     try:
         return datetime.fromisoformat(value).strftime("%d.%m.%Y %H:%M")
@@ -210,11 +295,19 @@ def _album(slug: str, entry: dict, meta: dict, with_photos: bool = False) -> dic
     private_ids = {row["id"] for row in entry["private"]}
     rows = entry["public"] + entry["private"]
     cover = None
-    if rows:
-        row = min(rows, key=lambda item: ((item.get("score") or {}).get("composite", 99.0),
-                                          item["id"]))
-        cover = {"id": row["id"],
-                 "tree": "private" if row["id"] in private_ids else "public"}
+    pinned = load_cover_pins().get(slug)
+    candidates = entry["public"] if entry["public"] else rows
+    pinned_row = next((row for row in rows if row["id"] == pinned), None)
+    if pinned_row is not None and (pinned_row in entry["public"] or not entry["public"]):
+        cover_row = pinned_row
+    elif candidates:
+        cover_row = min(candidates, key=lambda item: ((item.get("score") or {}).get("composite", 99.0),
+                                                      item["id"]))
+    else:
+        cover_row = None
+    if cover_row is not None:
+        cover = {"id": cover_row["id"],
+                 "tree": "private" if cover_row["id"] in private_ids else "public"}
     return {
         "slug": slug,
         "label": meta.get("label", slug),
@@ -229,6 +322,7 @@ def _album(slug: str, entry: dict, meta: dict, with_photos: bool = False) -> dic
         "published": entry.get("published", 0),
         "shares": _share_rows(entry),
         "cover": cover,
+        "cover_id": cover["id"] if cover else None,
         "photos": _photo_rows(entry, load_depth_issues()) if with_photos else [],
     }
 
@@ -246,6 +340,14 @@ def album_detail(slug: str) -> dict:
         abort(404)
     assert entry is not None
     return _album(slug, entry, album_labels().get(slug, {}), with_photos=True)
+
+
+def album_summary(slug: str) -> dict | None:
+    """Counts and badge state for a post-action UI refresh; no photo rows."""
+    entry = library.catalog().get(slug)
+    if entry is None:
+        return None
+    return _album(slug, entry, album_labels().get(slug, {}))
 
 
 def load_dismissed() -> set[tuple[str, str]]:
@@ -494,7 +596,8 @@ def dashboard():
 def album_page(slug: str):
     album = album_detail(slug)
     return render_template("album.html", album=album, csrf=session["csrf"],
-                           user=CONFIG.get("username", ""))
+                           user=CONFIG.get("username", ""),
+                           move_albums=album_choices(slug))
 
 
 @app.get(f"{PREFIX}/duplicates")
@@ -586,7 +689,12 @@ def upload():
     if not UPLOAD_LOCK.acquire(blocking=False):
         flash("Es läuft bereits ein Upload. Bitte warte, bis er fertig ist.", "error")
         return redirect(album_url(album))
+    MUTATION_LOCK.acquire()
     try:
+        entry = library.catalog().get(album)
+        if entry is None:
+            flash(f"Album nicht gefunden: {album}", "error")
+            return redirect(f"{PREFIX}/")
         requested = request.form.get("visibility", "auto")
         if requested not in {"auto", "private", "public"}:
             requested = "auto"
@@ -657,6 +765,7 @@ def upload():
               "ok" if ok else "error")
         return redirect(album_url(album))
     finally:
+        MUTATION_LOCK.release()
         UPLOAD_LOCK.release()
 
 
@@ -670,10 +779,13 @@ def album_new():
     if not label:
         flash("Albumname fehlt.", "error")
         return redirect(f"{PREFIX}/")
-    created = library.create_album(label, sub, url, private)
-    ok, message = True, "privat — kein Deploy nötig"
-    if not private:
-        ok, message = library.deploy()
+    created = None
+    with MUTATION_LOCK:
+        created = library.create_album(label, sub, url, private)
+        ok, message = True, "privat — kein Deploy nötig"
+        if not private:
+            ok, message = library.deploy()
+    assert created is not None
     audit("album", f"new {created['slug']} private={private}")
     flash(f"Album angelegt: {label} ({created['slug']}, "
           f"{'privat' if private else 'öffentlich'}); Deploy {'OK' if ok else 'FEHLER'}: {message}",
@@ -692,12 +804,13 @@ def album_rename():
     if not label:
         flash("Albumname fehlt.", "error")
         return redirect(back)
-    try:
-        result = library.rename_album(slug, label, sub, url)
-    except (ValueError, OSError) as exc:
-        flash(f"Umbenennen fehlgeschlagen: {exc}", "error")
-        return redirect(back)
-    deployed, message = library.deploy()
+    with MUTATION_LOCK:
+        try:
+            result = library.rename_album(slug, label, sub, url)
+        except (ValueError, OSError) as exc:
+            flash(f"Umbenennen fehlgeschlagen: {exc}", "error")
+            return redirect(back)
+        deployed, message = library.deploy()
     audit("album-rename", f"{slug} {result['old'].get('label')!r} -> {label!r} rc={deployed}")
     flash(f"{slug}: umbenannt in „{label}“"
           + (f"; Deploy {'OK' if deployed else 'FEHLER'}: {message}" if deployed else f"; {message}"),
@@ -715,14 +828,15 @@ def gate():
     except ValueError:
         minimum = 0.0
     minimum = max(0.0, min(5.0, minimum))
-    gates = publish.load_gates()
-    gates[album] = minimum
-    publish.save_gates(gates)
+    with MUTATION_LOCK:
+        gates = publish.load_gates()
+        gates[album] = minimum
+        publish.save_gates(gates)
+        entry = library.catalog().get(album, {})
+        ok, message = True, "privat — greift beim nächsten Link"
+        if entry.get("public"):
+            ok, message = library.deploy()
     audit("gate", f"{album} min={minimum}")
-    entry = library.catalog().get(album, {})
-    ok, message = True, "privat — greift beim nächsten Link"
-    if entry.get("public"):
-        ok, message = library.deploy()
     flash(f"{album}: Mindest-Score {minimum:.1f} — Deploy {'OK' if ok else 'FEHLER'}: {message}",
           "ok" if ok else "error")
     return redirect(back)
@@ -783,11 +897,14 @@ def visibility():
     back = back_url(album_url(slug) if slug else f"{PREFIX}/")
     if mode not in {"public", "private"}:
         abort(400)
+    MUTATION_LOCK.acquire()
     try:
         result = library.set_visibility(slug, mode == "private")
     except OSError as exc:
         flash(f"Fehler: {exc}", "error")
         return redirect(back)
+    finally:
+        MUTATION_LOCK.release()
     if not result.get("changed"):
         flash(f"{slug}: keine Änderung.", "error")
         return redirect(back)
@@ -807,18 +924,210 @@ def photo_visibility():
     mode = request.form.get("mode", "")
     album = request.form.get("album", "")
     back = back_url(album_url(album) if album else f"{PREFIX}/")
+    wants_json = request.headers.get("X-Requested-With") == "fetch"
     if not PHOTO_ID.match(pid) or mode not in {"public", "private"}:
+        if wants_json:
+            return jsonify({"ok": False, "error": "Ungültige Anfrage."}), 400
         abort(400)
+    MUTATION_LOCK.acquire()
     try:
         result = library.set_photo_visibility(pid, mode == "private")
     except (ValueError, OSError) as exc:
+        if wants_json:
+            return jsonify({"ok": False, "error": str(exc)}), 409
         flash(f"{pid}: {exc}", "error")
         return redirect(back)
+    finally:
+        MUTATION_LOCK.release()
     deployed, message = result.get("deploy", (True, ""))
     audit("photo-visibility", f"{pid} -> {mode} changed={result['changed']}")
+    cover_changed = False
+    if mode == "private" and result["changed"]:
+        if drop_cover_pin(pid=pid) and album:
+            cover_changed = True
+            cover_deployed, cover_message = refresh_cover(album)
+            deployed = deployed and cover_deployed
+            if cover_message:
+                message = cover_message
+    tree = result.get("to") or result.get("tree")
+    if wants_json:
+        summary = album_summary(album) if album else None
+        return jsonify({
+            "ok": True,
+            "changed": result["changed"],
+            "id": pid,
+            "tree": tree,
+            "deploy_ok": deployed,
+            "message": message,
+            "cover_changed": cover_changed,
+            "album": summary,
+        })
     flash(f"{pid}: jetzt {'privat' if mode == 'private' else 'öffentlich'}"
           + (f" — Deploy {'OK' if deployed else 'FEHLER'}: {message}"
              if result["changed"] else ""),
+          "ok" if deployed else "error")
+    return redirect(back)
+
+
+@app.post(f"{PREFIX}/photo/album")
+@protected
+def photo_album():
+    target = request.form.get("album", "")
+    ids = [pid for pid in request.form.getlist("ids") if pid]
+    back = back_url()
+    if not target or not ids:
+        flash("Keine Fotos ausgewählt.", "error")
+        return redirect(back)
+    if any(not PHOTO_ID.match(pid) for pid in ids):
+        abort(400)
+    if request.form.get("from", "") == target:
+        flash("Die Fotos sind bereits in diesem Album.", "error")
+        return redirect(back)
+    choices = {item["slug"]: item for item in album_choices()}
+    if target not in choices:
+        flash(f"Unbekanntes Album: {target}", "error")
+        return redirect(back)
+    UPLOAD_LOCK.acquire()
+    MUTATION_LOCK.acquire()
+    errors: list[str] = []
+    deployed, message = True, ""
+    deploy_error = ""
+    covers_safe = True
+    allow_empty = False
+    try:
+        meta = next((item for item in album_choices() if item["slug"] == target), None)
+        if meta is None:
+            raise ValueError(f"Unbekanntes Album: {target}")
+        if meta["is_private"]:
+            target_private = True
+        elif meta["mixed"]:
+            target_private = None  # mixed target: keep each photo's current visibility
+        else:
+            target_private = False
+        target_entry = library.catalog().get(target, {})
+        target_ids = {row["id"] for row in target_entry.get("public", [])
+                      + target_entry.get("private", [])}
+        if set(ids).issubset(target_ids):
+            raise ValueError("Die Fotos sind bereits in diesem Album.")
+        result = library.move_photos(ids, target, target_private)
+        public_touched = result["public_touched"]
+        if public_touched:
+            cover_error = ""
+            try:
+                covers = subprocess.run([str(SBS_PYTHON), str(REPO / "pipeline" / "covers.py")],
+                                        cwd=REPO, capture_output=True, text=True, timeout=120)
+            except (OSError, subprocess.SubprocessError) as exc:
+                cover_error = f"{type(exc).__name__}: {exc}"
+            else:
+                if covers.returncode != 0:
+                    lines = (covers.stdout + covers.stderr).strip().splitlines()
+                    cover_error = lines[-1] if lines else "Neuerzeugung fehlgeschlagen"
+            if cover_error:
+                errors.append("Cover: " + cover_error)
+                try:
+                    library.mark_covers_unsafe(cover_error)
+                except OSError as mark_exc:
+                    errors.append("Cover-Marker: " + str(mark_exc))
+                    covers_safe = False
+                # Fail closed: never re-publish a cover that may show a moved photo.
+                cover_dir = REPO / "build" / "covers"
+                try:
+                    for stale in cover_dir.glob("*.jpg"):
+                        stale.unlink(missing_ok=True)
+                except OSError as cleanup_exc:
+                    errors.append("Cover-Aufräumen: " + str(cleanup_exc))
+                    # If individual deletion fails, move the whole directory aside and
+                    # recreate an empty one so deploy removes the stale public covers.
+                    try:
+                        backup = cover_dir.with_name(f"covers.stale-{secrets.token_hex(4)}")
+                        cover_dir.rename(backup)
+                        cover_dir.mkdir(parents=True, exist_ok=True)
+                    except OSError as fallback_exc:
+                        errors.append("Cover-Verzeichnis: " + str(fallback_exc))
+                        covers_safe = False
+            else:
+                try:
+                    library.clear_covers_unsafe()
+                except OSError as clear_exc:
+                    errors.append("Cover-Marker: " + str(clear_exc))
+                    covers_safe = False
+            allow_empty = False
+            try:
+                allow_empty = not json.loads((REPO / "build" / "manifest.json").read_text())
+            except (OSError, ValueError):
+                allow_empty = False
+            # Deploy before scoring so a public-to-private move leaves the public site
+            # even when scoring or cover generation fails.
+            deployed, message = deploy_with_retry(skip_covers=not covers_safe,
+                                                  allow_empty=allow_empty)
+            if not deployed:
+                deploy_error = "Deploy: " + (message or "fehlgeschlagen")
+        try:
+            scored = subprocess.run([str(SBS_PYTHON), str(REPO / "pipeline" / "score.py")],
+                                    cwd=REPO, capture_output=True, text=True, timeout=600)
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append("Score: " + f"{type(exc).__name__}: {exc}")
+        else:
+            if scored.returncode != 0:
+                lines = (scored.stdout + scored.stderr).strip().splitlines()
+                errors.append("Score: " + (lines[-1] if lines else "fehlgeschlagen"))
+            elif public_touched:
+                deployed, message = deploy_with_retry(skip_covers=not covers_safe,
+                                                      allow_empty=allow_empty)
+                deploy_error = ("" if deployed else "Deploy nach Score: " + (message or "fehlgeschlagen"))
+    except (ValueError, OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
+        flash(f"Verschieben fehlgeschlagen: {exc}", "error")
+        return redirect(back)
+    finally:
+        MUTATION_LOCK.release()
+        UPLOAD_LOCK.release()
+    if deploy_error:
+        errors.append(deploy_error)
+    label = choices[target]["label"]
+    visibility = ("Sichtbarkeit unverändert" if target_private is None
+                  else "privat" if target_private else "öffentlich")
+    audit("photo-album", f"{len(ids)} -> {target} private={target_private} deploy={deployed}")
+    message_text = f"{len(ids)} Foto(s) nach „{label}“ verschoben ({visibility})."
+    if errors:
+        message_text += " " + "; ".join(errors)
+        if not deployed:
+            message_text += " Lokale Änderung bleibt — Deploy erneut ausführen."
+    elif public_touched:
+        message_text += f" Deploy OK: {message}"
+    flash(message_text, "error" if errors or not deployed else "ok")
+    return redirect(back)
+
+
+@app.post(f"{PREFIX}/cover")
+@protected
+def set_cover():
+    album = request.form.get("album", "")
+    pid = request.form.get("id", "")
+    back = back_url(album_url(album) if album else f"{PREFIX}/")
+    if not album or not PHOTO_ID.match(pid):
+        abort(400)
+    detail = album_detail(album)
+    photo = next((row for row in detail["photos"] if row["id"] == pid), None)
+    if photo is None:
+        flash(f"{pid}: Foto nicht in diesem Album.", "error")
+        return redirect(back)
+    if photo["tree"] != "public":
+        flash(f"{pid}: Nur öffentliche Fotos können Cover sein.", "error")
+        return redirect(back)
+    command = [str(SBS_PYTHON), str(REPO / "pipeline" / "covers.py"),
+               "--album", album, "--id", pid, "--build", str(REPO / "build")]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        lines = (result.stdout + result.stderr).strip().splitlines()
+        flash(f"Cover fehlgeschlagen: {lines[-1] if lines else 'unbekannter Fehler'}", "error")
+        return redirect(back)
+    with COVER_LOCK:
+        pins = load_cover_pins()
+        pins[album] = pid
+        save_cover_pins(pins)
+    deployed, message = library.deploy()
+    audit("cover", f"{album} -> {pid} deploy={deployed}")
+    flash(f"{album}: Cover {pid} gesetzt. Deploy {'OK' if deployed else 'FEHLER'}: {message}",
           "ok" if deployed else "error")
     return redirect(back)
 
@@ -827,26 +1136,36 @@ def photo_visibility():
 @protected
 def remove():
     pid = request.form.get("id", "")
+    album = request.form.get("album", "")
     back = back_url()
     if not PHOTO_ID.match(pid):
         abort(400)
+    MUTATION_LOCK.acquire()
     try:
         result = library.remove_photo(pid, reason="admin-ui")
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(back)
+    finally:
+        MUTATION_LOCK.release()
     with DEPTH_LOCK:
         issues = load_depth_issues()
         if pid in issues:
             issues.pop(pid)
             save_depth_issues(issues)
+    cover_changed = drop_cover_pin(pid=pid)
     deployed, message = result.get("deploy", (True, ""))
+    if cover_changed and album:
+        cover_deployed, cover_message = refresh_cover(album)
+        deployed = deployed and cover_deployed
+        if cover_message:
+            message = cover_message
     audit("remove", f"{pid} tree={result['tree']} shares={','.join(result['shares'])}")
     source_note = "Quelle gelöscht" if result.get("source_deleted") else "keine Quelle gefunden"
     flash(f"{pid} endgültig gelöscht ({result['tree']}, {source_note}; "
           f"{len(result['shares'])} Link(s) bereinigt)"
           + (f"; Deploy {'OK' if deployed else 'FEHLER'}: {message}"
-             if result["tree"] == "public" else ""),
+             if result["tree"] == "public" or cover_changed else ""),
           "ok" if deployed else "error")
     return redirect(back)
 

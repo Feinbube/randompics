@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -14,9 +15,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import publish  # noqa: E402
 from albums import (album_for, photo_id, read_exclude, read_non_sbs, read_overrides,  # noqa: E402
                     read_private, write_non_sbs)
-from render import COVERS, NotStereo, render_fallback, render_photo, write_covers  # noqa: E402
+from cover_policy import CURATED_COVERS, choose_cover  # noqa: E402
+from render import NotStereo, render_fallback, render_photo, write_covers  # noqa: E402
 
 ALBUMS = ("oceanografic", "ciutat", "forum", "abend")
+COVERS_STATE = Path(os.environ.get("RP_SHARES_ROOT", "/srv/randompics")) / "covers.json"
+
+
+def load_cover_pins() -> dict[str, str]:
+    """Admin-selected covers; a missing or malformed file means "no pins"."""
+    try:
+        raw = json.loads(COVERS_STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items()
+            if isinstance(key, str) and isinstance(value, str)}
 
 
 def prune_singles(shots: Path) -> set[str]:
@@ -76,8 +91,12 @@ def reconcile_duplicates(build: Path) -> set[str]:
     return removed
 
 
-def covers_for(existing: list[dict]) -> dict[str, str]:
-    """One cover per album with rows; curated COVERS wins when it is present."""
+def covers_for(existing: list[dict], pins: dict[str, str] | None = None,
+               scores: dict | None = None, gates: dict | None = None) -> dict[str, str]:
+    """One cover per album with rows; shared policy, gate-aware."""
+    pins = load_cover_pins() if pins is None else pins
+    scores = publish.load_scores() if scores is None else scores
+    gates = publish.load_gates() if gates is None else gates
     by_album: dict[str, list[str]] = {}
     for row in existing:
         album = row.get("album")
@@ -85,8 +104,10 @@ def covers_for(existing: list[dict]) -> dict[str, str]:
             by_album.setdefault(album, []).append(row["id"])
     covers = {}
     for slug, ids in by_album.items():
-        curated = COVERS.get(slug)
-        covers[slug] = curated if curated in ids else sorted(ids)[0]
+        chosen = choose_cover(ids, pins.get(slug), CURATED_COVERS.get(slug),
+                              scores, gates.get(slug, 0.0))
+        if chosen is not None:
+            covers[slug] = chosen
     return covers
 
 
@@ -225,6 +246,7 @@ def main() -> None:
     # card, otherwise app.js requests a 404.
     cover_ids = covers_for(existing)
     write_covers(shots, build / "covers", cover_ids)
+    (build / "covers.json").write_text(json.dumps(cover_ids, indent=1, sort_keys=True) + "\n")
     for cover in (build / "covers").glob("*.jpg"):
         if cover.stem not in cover_ids:
             cover.unlink(missing_ok=True)

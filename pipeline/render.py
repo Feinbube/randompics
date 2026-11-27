@@ -309,5 +309,8 @@ def write_covers(shots: Path, out: Path, covers: dict[str, str] | None = None,
             left, right = eye(img[:, :half]), eye(img[:, half:2 * half])
         else:
             left = right = eye(img)
-        cv2.imwrite(str(out / f"{slug}.jpg"), np.hstack([left, right]),
-                    [cv2.IMWRITE_JPEG_QUALITY, 86])
+        target = out / f"{slug}.jpg"
+        if not cv2.imwrite(str(target), np.hstack([left, right]),
+                           [cv2.IMWRITE_JPEG_QUALITY, 86]):
+            target.unlink(missing_ok=True)
+            raise OSError(f"cover write failed: {slug}")

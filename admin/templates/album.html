@@ -19,13 +19,13 @@
   <div class="album-head">
     <div>
       <h1 style="margin:0 0 .2rem">{{ album.label }}</h1>
-      <p class="muted" style="margin:0">
-        {{ album.slug }} · {{ album.count }} Foto{% if album.count != 1 %}s{% endif %} · {{ album.published }} veröffentlicht
-        {% if album.public and album.private %}· {{ album.public }} öffentlich / {{ album.private }} privat{% endif %}
+      <p class="muted" id="album-summary" style="margin:0">
+        {{ album.slug }} · <span id="album-count">{{ album.count }}</span> Foto{% if album.count != 1 %}s{% endif %} · <span id="album-published">{{ album.published }}</span> veröffentlicht
+        <span id="album-split"{% if not (album.public and album.private) %} hidden{% endif %}>· <span id="album-public">{{ album.public }}</span> öffentlich / <span id="album-private">{{ album.private }}</span> privat</span>
         {% if album.gate %}· Gate {{ '%.1f'|format(album.gate) }}{% endif %}
       </p>
     </div>
-    {{ badge(album) }}
+    <span id="album-badge">{{ badge(album) }}</span>
     {% if album.public %}
     <a class="button-link" href="https://randompics.de/#album={{ album.slug }}"
        target="_blank" rel="noopener">Auf der Website ansehen ↗</a>
@@ -149,6 +149,25 @@
       <input id="photo-filter" type="search" placeholder="Foto oder Datum filtern …" aria-label="Fotos filtern">
       <span id="photo-count" class="muted">{{ album.photos|length }} von {{ album.photos|length }}</span>
     </div>
+    {% if move_albums %}
+    <form method="post" action="/admin/photo/album" id="move-form" class="move-bar">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="back" value="album:{{ album.slug }}">
+      <input type="hidden" name="from" value="{{ album.slug }}">
+      <label for="move-target" class="muted">Ausgewählte Fotos verschieben nach</label>
+      <select id="move-target" name="album" required>
+        <option value="">Album wählen …</option>
+        {% for target in move_albums %}
+        <option value="{{ target.slug }}">{{ target.label }} — {% if target.is_private %}privat{% elif target.mixed %}gemischt (Sichtbarkeit bleibt){% else %}öffentlich{% endif %}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Verschieben</button>
+      <span id="move-count" class="muted">0 ausgewählt</span>
+    </form>
+    <p class="hint muted move-hint">Öffentliche Zielalben veröffentlichen die Fotos, private
+      nehmen sie von der Website. Bei gemischten Zielalben bleibt die Sichtbarkeit jedes Fotos
+      unverändert.</p>
+    {% endif %}
     <p class="legend muted" style="margin:.2rem 0 .6rem;font-size:.82rem">
       Score 0–5 (höher = besser) · Ähnl. = Ähnlichkeit zum ähnlichsten Foto ·
       ⚠ Tiefenproblem = im Lightbox markiert.
@@ -156,7 +175,9 @@
     {% if album.photos %}
     <div class="grid" id="photo-grid">
       {% for photo in album.photos %}
-        {{ photo_tile(photo, album.slug, csrf, 'album:' ~ album.slug, gate=album.gate) }}
+        {{ photo_tile(photo, album.slug, csrf, 'album:' ~ album.slug, gate=album.gate,
+                      allow_move=(move_albums|length > 0),
+                      allow_cover=album.public > 0, cover_id=album.cover_id) }}
       {% endfor %}
     </div>
     <p id="photo-empty" class="empty" hidden>Kein Foto gefunden.</p>
@@ -241,6 +262,22 @@
   }
   applySort();
   apply();
+})();
+</script>
+<script>
+(function () {
+  const form = document.getElementById("move-form");
+  if (!form) return;
+  const boxes = Array.from(document.querySelectorAll('input[form="move-form"][name="ids"]'));
+  const button = form.querySelector('button[type="submit"]');
+  const count = document.getElementById("move-count");
+  function update() {
+    const selected = boxes.filter(function (box) { return box.checked; }).length;
+    if (count) count.textContent = selected + " ausgewählt";
+    if (button) button.disabled = selected === 0;
+  }
+  boxes.forEach(function (box) { box.addEventListener("change", update); });
+  update();
 })();
 </script>
 {% endblock %}

@@ -11,6 +11,7 @@ Checks run against the live vhost through 127.0.0.1 (TLS + Host preserved).
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -53,7 +54,8 @@ def curl(path: str, head: bool = False) -> tuple[int, bytes]:
 
 def main() -> int:
     local = json.loads((REPO / "build" / "manifest.json").read_text())
-    if not local:
+    allow_empty = os.environ.get("RP_ALLOW_EMPTY") == "1"
+    if not local and not allow_empty:
         print("build/manifest.json is empty — run build.py first", file=sys.stderr)
         return 1
     if not (REPO / "build" / "photos").is_dir():
@@ -88,7 +90,18 @@ def main() -> int:
         elif entry.is_file() and entry.name != "manifest.json":
             entry.unlink(missing_ok=True)
     (DOCROOT / "photos" / "manifest.json").write_text(json.dumps(selected, indent=1) + "\n")
-    rsync(REPO / "build" / "covers", DOCROOT / "covers")
+    if os.environ.get("RP_SKIP_COVERS") == "1":
+        # Fail closed: remove all public covers instead of republishing a stale pick.
+        with tempfile.TemporaryDirectory() as empty:
+            rsync(Path(empty), DOCROOT / "covers")
+        (DOCROOT / "covers.json").write_text("{}\n")
+    else:
+        rsync(REPO / "build" / "covers", DOCROOT / "covers")
+        cover_map = REPO / "build" / "covers.json"
+        if cover_map.exists():
+            (DOCROOT / "covers.json").write_text(cover_map.read_text())
+        else:
+            (DOCROOT / "covers.json").write_text("{}\n")
     run(["chmod", "-R", "a+rX", str(DOCROOT)])
 
     failures = []
@@ -107,10 +120,11 @@ def main() -> int:
         if code != 200:
             failures.append(f"sample photo HTTP {code}")
 
-    slug = local[0]["album"]
-    code, _ = curl(f"/covers/{slug}.jpg", head=True)
-    if code != 200:
-        failures.append(f"cover HTTP {code}")
+    if os.environ.get("RP_SKIP_COVERS") != "1" and local:
+        slug = local[0]["album"]
+        code, _ = curl(f"/covers/{slug}.jpg", head=True)
+        if code != 200:
+            failures.append(f"cover HTTP {code}")
 
     code, body = curl("/robots.txt")
     if code != 200 or b"Disallow: /s/" not in body:

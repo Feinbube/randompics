@@ -24,6 +24,7 @@ PUBLIC = REPO / "build"
 PRIVATE = REPO / "build-private"
 SHARES_ROOT = Path(os.environ.get("RP_SHARES_ROOT", "/srv/randompics"))
 SHARES = SHARES_ROOT / "shares"
+COVERS_UNSAFE = SHARES_ROOT / "covers-unsafe.json"
 SOURCE = REPO / "source" / "Valencia"
 
 TREES = {"public": PUBLIC, "private": PRIVATE}
@@ -54,9 +55,9 @@ def rebuild_manifest(tree: Path, overrides: dict[str, str] | None = None) -> lis
         meta_file = out / "meta.json"
         meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
         rows.append({"id": out.name,
+                     **meta,
                      "album": overrides.get(out.name) or album_for(out.name),
-                     "ok": meta.get("depth", True) is not False,
-                     **meta})
+                     "ok": meta.get("depth", True) is not False})
     write_manifest(tree, rows)
     return rows
 
@@ -139,13 +140,30 @@ def rename_album(slug: str, label: str, sub: str = "", url: str = "") -> dict:
     return {"slug": slug, "old": previous, "new": labels[slug]}
 
 
-def deploy() -> tuple[bool, str]:
+def deploy(skip_covers: bool = False, allow_empty: bool = False) -> tuple[bool, str]:
     if os.environ.get("RP_DEPLOY", "1") == "0":
         return True, "skipped (RP_DEPLOY=0)"
+    env = os.environ.copy()
+    if skip_covers or COVERS_UNSAFE.exists():
+        env["RP_SKIP_COVERS"] = "1"
+    if allow_empty:
+        env["RP_ALLOW_EMPTY"] = "1"
     result = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "deploy.py")],
-                            capture_output=True, text=True, timeout=120)
+                            capture_output=True, text=True, timeout=120, env=env)
     output = (result.stdout + result.stderr).strip().splitlines()
     return result.returncode == 0, (output[-1] if output else "")
+
+
+def mark_covers_unsafe(reason: str) -> None:
+    COVERS_UNSAFE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = COVERS_UNSAFE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"reason": reason[:500]}, indent=1) + "\n")
+    os.chmod(tmp, 0o600)
+    tmp.replace(COVERS_UNSAFE)
+
+
+def clear_covers_unsafe() -> None:
+    COVERS_UNSAFE.unlink(missing_ok=True)
 
 
 def _drop_override(pid: str) -> None:
@@ -222,6 +240,89 @@ def set_photo_visibility(pid: str, make_private: bool) -> dict:
     rebuild_manifest(src)
     rebuild_manifest(dst)
     return {"changed": True, "id": pid, "from": current, "to": target, "deploy": deploy()}
+
+
+def _write_album_overrides(ids: set[str], target: str) -> None:
+    """Set the pinned album for ids, preserving comments and unrelated lines."""
+    path = OVERRIDES_FILE
+    original = path.read_text() if path.exists() else ""
+    found = set()
+    lines = []
+    for line in original.splitlines():
+        body, _, comment = line.partition("#")
+        parts = body.split()
+        if parts and parts[0] in ids:
+            found.add(parts[0])
+            lines.append(f"{parts[0]} {target}" + (f"  #{comment}" if comment else ""))
+        else:
+            lines.append(line)
+    for pid in sorted(ids - found):
+        lines.append(f"{pid} {target}")
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text("\n".join(lines).rstrip("\n") + "\n")
+    tmp.replace(path)
+
+
+def move_photos(ids: list[str], target: str, target_private: bool | None) -> dict:
+    """Move photos to another album; None means keep each photo's visibility.
+
+    All photos are validated first. A cross-tree move is rolled back if the
+    override or manifest update fails; the caller runs scoring and deployment.
+    """
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        raise ValueError("keine Fotos ausgewählt")
+    fixed_tree = None if target_private is None else ("private" if target_private else "public")
+    plans: list[tuple[str, str, str, Path, Path]] = []
+    for pid in ids:
+        current = next((name for name, tree in TREES.items()
+                        if (tree / "photos" / pid).is_dir()), None)
+        if current is None:
+            raise ValueError(f"photo not found: {pid}")
+        desired = current if fixed_tree is None else fixed_tree
+        src = TREES[current] / "photos" / pid
+        dst = TREES[desired] / "photos" / pid
+        if current != desired and dst.exists():
+            raise ValueError(f"{pid} already exists in {desired}")
+        plans.append((pid, current, desired, src, dst))
+
+    original_overrides = OVERRIDES_FILE.read_text() if OVERRIDES_FILE.exists() else ""
+    original_manifests = {
+        name: (tree / "manifest.json").read_text()
+        if (tree / "manifest.json").exists() else ""
+        for name, tree in TREES.items()
+    }
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for pid, current, desired, src, dst in plans:
+            if current == desired:
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(src, dst)
+            moved.append((src, dst))
+        _write_album_overrides(set(ids), target)
+        rebuild_manifest(PUBLIC)
+        rebuild_manifest(PRIVATE)
+    except BaseException:
+        for src, dst in reversed(moved):
+            if dst.is_dir() and not src.exists():
+                dst.rename(src)
+        if OVERRIDES_FILE.exists():
+            OVERRIDES_FILE.write_text(original_overrides)
+        for name, tree in TREES.items():
+            manifest = tree / "manifest.json"
+            if original_manifests[name]:
+                manifest.write_text(original_manifests[name])
+        raise
+    return {
+        "ids": ids,
+        "target": target,
+        "target_private": target_private,
+        "moved": len(ids),
+        "tree_changed": len(moved),
+        "public_touched": any(current == "public" or desired == "public"
+                              for _, current, desired, _, _ in plans),
+    }
 
 
 def purge_from_shares(pid: str) -> list[str]:
