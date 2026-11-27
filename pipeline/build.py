@@ -116,7 +116,8 @@ def jobs(source: Path, shots: Path, depth_dir: Path | None,
          private: set[str] | None = None,
          only: set[str] | None = None,
          overrides: dict[str, str] | None = None,
-         skip: set[str] | None = None) -> list[tuple[Path, Path, Path | None]]:
+         skip: set[str] | None = None,
+         explicit: set[str] | None = None) -> list[tuple[Path, Path, Path | None]]:
     overrides = overrides or {}
     files = sorted(source.glob("*.jpg"))
     rows = []
@@ -127,7 +128,9 @@ def jobs(source: Path, shots: Path, depth_dir: Path | None,
         if skip and pid in skip:
             continue
         album = overrides.get(pid) or album_for(pid)
-        if private and album in private:
+        # A photo explicitly present in this build tree stays there even when
+        # its album is otherwise private (mixed albums, admin moves).
+        if private and album in private and not (explicit and pid in explicit):
             continue
         if only and album not in only:
             continue
@@ -203,9 +206,10 @@ def main() -> None:
     # because its album is still on the album-level private list.
     public_ids = public_photo_ids(build)
     private_ids = private_photo_ids(build)
+    explicit = {entry.name for entry in shots.iterdir() if entry.is_dir()}
     todo = jobs(source, shots, Path(args.depth_dir) if args.depth_dir else None,
                 excluded, private, only or None, overrides,
-                skip=non_sbs | public_ids | private_ids)
+                skip=non_sbs | public_ids | private_ids, explicit=explicit)
     if not args.force:
         todo = [j for j in todo if not (j[1] / "scene.jpg").exists()]
     print(f"{len(todo)} photo(s) to render", flush=True)
