@@ -178,7 +178,7 @@ function renderAlbumCards() {
     card.href = `#album=${slug}`;
     card.dataset.cover = COVER_IDS[slug] || "";
     card.innerHTML = `
-      <img class="cover-img" src="covers/${slug}.jpg?v=20261127a" alt="" loading="eager" width="2400" height="800">
+      <img class="cover-img" src="covers/${slug}.jpg?v=20261127c" alt="" loading="eager" width="2400" height="800">
       <span class="shade"></span>
       <span class="count">${counts[slug]} Fotos</span>
       <span class="meta"><h2>${meta.label}</h2><p class="sub">${meta.sub}</p></span>`;

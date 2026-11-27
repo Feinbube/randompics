@@ -136,10 +136,10 @@ body.locked { overflow: hidden; }
 }
 
 .album-card img.cover-img {
-  width: 200%;
+  width: 100%;
   max-width: none;
   height: auto;
-  aspect-ratio: auto;
+  aspect-ratio: 3 / 2;
   object-fit: cover;
 }
 

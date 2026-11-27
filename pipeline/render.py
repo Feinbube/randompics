@@ -275,10 +275,10 @@ COVERS = {
 
 def write_covers(shots: Path, out: Path, covers: dict[str, str] | None = None,
                  width: int = 1200) -> None:
-    """3:2 stereo-pair covers: left and right eye side by side.
+    """3:2 album covers from the chosen photo's left eye.
 
-    The public card shows one eye at a time with the same CSS wiggle as the hero,
-    so the album covers participate in the 3D effect instead of staying flat.
+    The static card stays a single image; the public page adds the 2.5D mesh on
+    hover/pointer movement using the photo's scene and depth map.
     """
     out.mkdir(parents=True, exist_ok=True)
     covers = COVERS if covers is None else covers
@@ -306,11 +306,10 @@ def write_covers(shots: Path, out: Path, covers: dict[str, str] | None = None,
             continue
         if pair.exists() and img.shape[1] >= 2:
             half = img.shape[1] // 2
-            left, right = eye(img[:, :half]), eye(img[:, half:2 * half])
+            cover = eye(img[:, :half])
         else:
-            left = right = eye(img)
+            cover = eye(img)
         target = out / f"{slug}.jpg"
-        if not cv2.imwrite(str(target), np.hstack([left, right]),
-                           [cv2.IMWRITE_JPEG_QUALITY, 86]):
+        if not cv2.imwrite(str(target), cover, [cv2.IMWRITE_JPEG_QUALITY, 86]):
             target.unlink(missing_ok=True)
             raise OSError(f"cover write failed: {slug}")
